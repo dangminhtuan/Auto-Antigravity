@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AGY Auto-Approve</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <!-- Header -->
+  <header>
+    <div class="logo">
+      <span class="logo-icon">⚡</span>
+      <span class="logo-text">AGY Auto-Approve</span>
+    </div>
+    <label class="toggle-switch" title="Bat / Tat extension">
+      <input type="checkbox" id="toggle-enabled" />
+      <span class="slider"></span>
+    </label>
+  </header>
+
+  <!-- Status bar -->
+  <div class="status-bar" id="status-bar">
+    <span id="status-text">Dang tai...</span>
+  </div>
+
+  <!-- Delay config -->
+  <section class="section">
+    <h3 class="section-title">⏱ Cau hinh delay</h3>
+
+    <div class="setting-row">
+      <label class="setting-label">
+        <span class="dot safe"></span>
+        An toan (safe)
+      </label>
+      <div class="setting-control">
+        <input type="number" id="delay-safe" min="1" max="3600" step="1" />
+        <span class="unit">giay</span>
+      </div>
+    </div>
+
+    <div class="setting-row">
+      <label class="setting-label">
+        <span class="dot danger"></span>
+        Nguy hiem (dangerous)
+      </label>
+      <div class="setting-control">
+        <input type="number" id="delay-danger" min="1" max="3600" step="1" />
+        <span class="unit">giay</span>
+      </div>
+    </div>
+
+    <div class="setting-row" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
+      <label class="setting-label" title="1=Allow once | 2=Always in convo | 3=Always in project | 4=Always globally">
+        🎯 Chon option so
+      </label>
+      <div class="setting-control">
+        <select id="target-option" style="background:var(--surface2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:12px;padding:3px 6px;outline:none;">
+          <option value="1">1 — Allow once</option>
+          <option value="2">2 — Always (conversation)</option>
+          <option value="3">3 — Always (project)</option>
+          <option value="4" selected>4 — Always (global)</option>
+        </select>
+      </div>
+    </div>
+
+    <button class="btn-save" id="btn-save">Luu cau hinh</button>
+    <div class="save-msg" id="save-msg" hidden>✓ Da luu!</div>
+  </section>
+
+
+  <!-- Log -->
+  <section class="section">
+    <div class="section-title-row">
+      <h3 class="section-title">📋 Lich su phe duyet</h3>
+      <button class="btn-clear" id="btn-clear-log">Xoa</button>
+    </div>
+    <div class="log-list" id="log-list">
+      <div class="log-empty">Chua co lich su nao.</div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <span>v1.0.0</span>
+    <a href="https://antigravity.google" target="_blank">antigravity.google</a>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>
