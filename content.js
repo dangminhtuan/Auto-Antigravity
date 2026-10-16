@@ -33,8 +33,12 @@
     if (window.__AGY_INTERVAL) clearInterval(window.__AGY_INTERVAL);
     if (window.__AGY_COUNTDOWN) clearInterval(window.__AGY_COUNTDOWN);
     if (window.__AGY_OBSERVER) window.__AGY_OBSERVER.disconnect();
+    const ctrlContainer = document.getElementById("agy-control-container");
+    if (ctrlContainer) ctrlContainer.remove();
     const toggleBtn = document.getElementById("agy-toggle-prompt-btn");
     if (toggleBtn) toggleBtn.remove();
+    const debugBar = document.getElementById("agy-debug-bar");
+    if (debugBar) debugBar.remove();
     const enhStyle = document.getElementById("agy-mobile-enhancements");
     if (enhStyle) enhStyle.remove();
     for (const l of _listeners) {
@@ -75,15 +79,34 @@
     } catch {}
   }
 
-  // ─── Notification Bar (Auto-hide & Zero Conflict) ─────────────────────────────
+  // ─── Notification Bar & Control Stack (Zero Overlap Flexbox) ─────────────────
   let hideBarTimer = null;
+
+  function getControlContainer() {
+    let container = document.getElementById("agy-control-container");
+    if (!container) {
+      container = document.createElement("div");
+      container.id = "agy-control-container";
+      container.style.cssText = `
+        position: fixed; top: 58px; right: 16px;
+        z-index: 2147483647;
+        display: flex; flex-direction: column; align-items: flex-end;
+        gap: 8px;
+        pointer-events: none;
+      `;
+      (document.body || document.documentElement).appendChild(container);
+    }
+    return container;
+  }
 
   function hideBar() {
     const bar = document.getElementById("agy-debug-bar");
     if (bar) {
       bar.style.opacity = "0";
       bar.style.transform = "translateY(-6px)";
-      bar.style.pointerEvents = "none";
+      setTimeout(() => {
+        if (bar.style.opacity === "0") bar.style.display = "none";
+      }, 250);
     }
   }
 
@@ -99,39 +122,36 @@
       return;
     }
 
+    const container = getControlContainer();
     let bar = document.getElementById("agy-debug-bar");
     if (!bar) {
       bar = document.createElement("div");
       bar.id = "agy-debug-bar";
       bar.style.cssText = `
-        position: fixed; top: 8px; right: 10px;
-        z-index: 2147483647;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        font-size: 11px; font-weight: 500;
-        padding: 5px 12px; border-radius: 20px;
-        max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        display: flex; align-items: center; gap: 6px;
+        font-size: 11.5px; font-weight: 500;
+        padding: 6px 14px; border-radius: 20px;
+        max-width: 340px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        display: none; align-items: center; gap: 6px;
         pointer-events: none;
-        opacity: 0; transform: translateY(-8px);
-        transition: opacity 0.3s ease, transform 0.3s ease;
-        /* Glassmorphism */
-        background: rgba(0, 0, 0, 0.12);
-        backdrop-filter: blur(12px) saturate(140%);
-        -webkit-backdrop-filter: blur(12px) saturate(140%);
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        color: rgba(255, 255, 255, 0.6);
-        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+        opacity: 0; transform: translateY(-6px);
+        transition: opacity 0.25s ease, transform 0.25s ease;
+        background: rgba(15, 23, 42, 0.6);
+        backdrop-filter: blur(16px) saturate(160%);
+        -webkit-backdrop-filter: blur(16px) saturate(160%);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        color: rgba(255, 255, 255, 0.9);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
       `;
-      document.body.appendChild(bar);
+      container.insertBefore(bar, container.firstChild);
     }
 
     clearTimeout(hideBarTimer);
 
-    // Color tint via border-left only (subtle, not block color)
     const tints = {
-      success: "rgba(52, 211, 153, 0.5)",
-      warning: "rgba(251, 191, 36, 0.5)",
-      info:    "rgba(56, 189, 248, 0.5)",
+      success: "rgba(52, 211, 153, 0.7)",
+      warning: "rgba(251, 191, 36, 0.7)",
+      info:    "rgba(56, 189, 248, 0.7)",
     };
     bar.style.borderLeftColor = tints[colorHint] || tints.info;
     bar.style.borderLeftWidth = "3px";
@@ -141,8 +161,11 @@
       bar.innerHTML = newHTML;
     }
 
-    bar.style.opacity = "0.85";
-    bar.style.transform = "translateY(0)";
+    bar.style.display = "flex";
+    requestAnimationFrame(() => {
+      bar.style.opacity = "0.95";
+      bar.style.transform = "translateY(0)";
+    });
 
     if (autoHideMs > 0) {
       hideBarTimer = setTimeout(() => {
@@ -167,23 +190,24 @@
     // Glassmorphism toggle button to hide/show prompt input area
     function createPromptToggleBtn() {
       if (document.getElementById("agy-toggle-prompt-btn")) return;
+      const container = getControlContainer();
+
       const btn = document.createElement("button");
       btn.id = "agy-toggle-prompt-btn";
       btn.innerHTML = "📖 Đọc tràn viền (Ẩn ô)";
       btn.style.cssText = `
-        position: fixed; top: 54px; right: 10px;
-        z-index: 2147483646;
+        pointer-events: auto;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        font-size: 12.5px; font-weight: 600;
-        padding: 7px 14px; border-radius: 20px;
-        background: rgba(15, 23, 42, 0.45);
+        font-size: 12px; font-weight: 600;
+        padding: 6px 14px; border-radius: 20px;
+        background: rgba(15, 23, 42, 0.55);
         backdrop-filter: blur(16px) saturate(160%);
         -webkit-backdrop-filter: blur(16px) saturate(160%);
         border: 1px solid rgba(255, 255, 255, 0.22);
         color: rgba(255, 255, 255, 0.85);
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
         cursor: pointer;
-        display: flex; align-items: center; gap: 6px;
+        display: flex; align-items: center; gap: 5px;
         user-select: none;
         transition: all 0.25s ease;
       `;
@@ -194,7 +218,7 @@
         isPromptHidden = !isPromptHidden;
         btn.innerHTML = isPromptHidden ? "✏️ Soạn thảo (Hiện ô)" : "📖 Đọc tràn viền (Ẩn ô)";
         btn.style.color = isPromptHidden ? "rgba(56, 189, 248, 0.95)" : "rgba(255, 255, 255, 0.85)";
-        btn.style.borderColor = isPromptHidden ? "rgba(56, 189, 248, 0.4)" : "rgba(255, 255, 255, 0.22)";
+        btn.style.borderColor = isPromptHidden ? "rgba(56, 189, 248, 0.45)" : "rgba(255, 255, 255, 0.22)";
 
         // Broadcast to all iframes
         document.querySelectorAll("iframe").forEach((ifr) => {
@@ -207,7 +231,7 @@
         });
       });
 
-      document.body.appendChild(btn);
+      container.appendChild(btn);
     }
 
     if (document.body) {
