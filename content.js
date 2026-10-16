@@ -33,6 +33,10 @@
     if (window.__AGY_INTERVAL) clearInterval(window.__AGY_INTERVAL);
     if (window.__AGY_COUNTDOWN) clearInterval(window.__AGY_COUNTDOWN);
     if (window.__AGY_OBSERVER) window.__AGY_OBSERVER.disconnect();
+    const toggleBtn = document.getElementById("agy-toggle-prompt-btn");
+    if (toggleBtn) toggleBtn.remove();
+    const enhStyle = document.getElementById("agy-mobile-enhancements");
+    if (enhStyle) enhStyle.remove();
     for (const l of _listeners) {
       l.target.removeEventListener(l.type, l.handler, l.options);
     }
@@ -159,6 +163,57 @@
         updateBar(e.data.htmlContent, e.data.colorHint || "info", e.data.autoHideMs || 0);
       }
     });
+
+    // Glassmorphism toggle button to hide/show prompt input area
+    function createPromptToggleBtn() {
+      if (document.getElementById("agy-toggle-prompt-btn")) return;
+      const btn = document.createElement("button");
+      btn.id = "agy-toggle-prompt-btn";
+      btn.innerHTML = "🔽 Ẩn ô nhập";
+      btn.style.cssText = `
+        position: fixed; top: 40px; right: 10px;
+        z-index: 2147483646;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-size: 11px; font-weight: 500;
+        padding: 4px 10px; border-radius: 16px;
+        background: rgba(0, 0, 0, 0.15);
+        backdrop-filter: blur(12px) saturate(140%);
+        -webkit-backdrop-filter: blur(12px) saturate(140%);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        color: rgba(255, 255, 255, 0.7);
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+        cursor: pointer;
+        display: flex; align-items: center; gap: 4px;
+        user-select: none;
+        transition: all 0.25s ease;
+      `;
+
+      let isPromptHidden = false;
+      addSafeListener(btn, "click", (e) => {
+        e.stopPropagation();
+        isPromptHidden = !isPromptHidden;
+        btn.innerHTML = isPromptHidden ? "🔼 Hiện ô nhập" : "🔽 Ẩn ô nhập";
+        btn.style.color = isPromptHidden ? "rgba(56, 189, 248, 0.9)" : "rgba(255, 255, 255, 0.7)";
+
+        // Broadcast to all iframes
+        document.querySelectorAll("iframe").forEach((ifr) => {
+          try {
+            ifr.contentWindow?.postMessage({
+              type: "AGY_TOGGLE_PROMPT",
+              hidden: isPromptHidden,
+            }, "*");
+          } catch (err) {}
+        });
+      });
+
+      document.body.appendChild(btn);
+    }
+
+    if (document.body) {
+      createPromptToggleBtn();
+    } else {
+      addSafeListener(window, "DOMContentLoaded", createPromptToggleBtn);
+    }
   }
 
   // ─── Deep Element Locator (Traverses DOM, Shadow DOM, Iframes) ───────────────
@@ -676,16 +731,16 @@
         const style = document.createElement("style");
         style.id = styleId;
         style.textContent = `
-          /* 1. Large readable text for mobile */
+          /* 1. Large readable text for mobile (18px) */
           [class*="prose"], [class*="markdown"], [class*="message"], p, li {
-            font-size: 16px !important;
-            line-height: 1.65 !important;
+            font-size: 18px !important;
+            line-height: 1.7 !important;
           }
           [role="combobox"], textarea, input {
-            font-size: 16px !important;
+            font-size: 18px !important;
           }
           pre, code {
-            font-size: 13.5px !important;
+            font-size: 14.5px !important;
           }
 
           /* 2. Responsive Tables -> Touch-friendly Vertical Cards */
@@ -738,8 +793,37 @@
         document.head.appendChild(style);
       }
 
+      let isPromptHidden = false;
+
+      function applyPromptVisibility() {
+        const box = document.querySelector('[role="combobox"], textarea');
+        const card = box?.closest('form') ||
+                     box?.closest('[class*="rounded-"], [class*="border-"]') ||
+                     box?.parentElement?.parentElement;
+        if (!card) return;
+
+        if (isPromptHidden) {
+          card.style.display = "none";
+          const sc = document.querySelector('.overflow-y-auto');
+          if (sc) sc.style.paddingBottom = "20px";
+        } else {
+          card.style.display = "";
+          card.style.marginBottom = "54px";
+          const sc = document.querySelector('.overflow-y-auto');
+          if (sc) sc.style.paddingBottom = "120px";
+        }
+      }
+
+      addSafeListener(window, "message", (e) => {
+        if (e.data && e.data.type === "AGY_TOGGLE_PROMPT") {
+          isPromptHidden = !!e.data.hidden;
+          applyPromptVisibility();
+        }
+      });
+
       // 4. Continuously ensure the prompt card is lifted 54px above Android navigation bar
       function liftPromptCard() {
+        if (isPromptHidden) return;
         const box = document.querySelector('[role="combobox"], textarea');
         if (!box) return;
         
