@@ -169,21 +169,21 @@
       if (document.getElementById("agy-toggle-prompt-btn")) return;
       const btn = document.createElement("button");
       btn.id = "agy-toggle-prompt-btn";
-      btn.innerHTML = "🔽 Ẩn ô nhập";
+      btn.innerHTML = "📖 Đọc tràn viền (Ẩn ô)";
       btn.style.cssText = `
-        position: fixed; top: 40px; right: 10px;
+        position: fixed; top: 54px; right: 10px;
         z-index: 2147483646;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        font-size: 11px; font-weight: 500;
-        padding: 4px 10px; border-radius: 16px;
-        background: rgba(0, 0, 0, 0.15);
-        backdrop-filter: blur(12px) saturate(140%);
-        -webkit-backdrop-filter: blur(12px) saturate(140%);
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        color: rgba(255, 255, 255, 0.7);
-        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+        font-size: 12.5px; font-weight: 600;
+        padding: 7px 14px; border-radius: 20px;
+        background: rgba(15, 23, 42, 0.45);
+        backdrop-filter: blur(16px) saturate(160%);
+        -webkit-backdrop-filter: blur(16px) saturate(160%);
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        color: rgba(255, 255, 255, 0.85);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
         cursor: pointer;
-        display: flex; align-items: center; gap: 4px;
+        display: flex; align-items: center; gap: 6px;
         user-select: none;
         transition: all 0.25s ease;
       `;
@@ -192,8 +192,9 @@
       addSafeListener(btn, "click", (e) => {
         e.stopPropagation();
         isPromptHidden = !isPromptHidden;
-        btn.innerHTML = isPromptHidden ? "🔼 Hiện ô nhập" : "🔽 Ẩn ô nhập";
-        btn.style.color = isPromptHidden ? "rgba(56, 189, 248, 0.9)" : "rgba(255, 255, 255, 0.7)";
+        btn.innerHTML = isPromptHidden ? "✏️ Soạn thảo (Hiện ô)" : "📖 Đọc tràn viền (Ẩn ô)";
+        btn.style.color = isPromptHidden ? "rgba(56, 189, 248, 0.95)" : "rgba(255, 255, 255, 0.85)";
+        btn.style.borderColor = isPromptHidden ? "rgba(56, 189, 248, 0.4)" : "rgba(255, 255, 255, 0.22)";
 
         // Broadcast to all iframes
         document.querySelectorAll("iframe").forEach((ifr) => {
@@ -785,9 +786,28 @@
             border-bottom: none !important;
           }
 
-          /* 3. Extra bottom padding so last message and prompt card are never covered */
-          .overflow-y-auto {
+          /* 3. Normal bottom padding when prompt is visible */
+          body:not(.agy-reading-mode) .overflow-y-auto {
             padding-bottom: 120px !important;
+          }
+
+          /* 4. Reading Mode: 100% full screen, zero waste at bottom */
+          body.agy-reading-mode .overflow-y-auto {
+            padding-bottom: 8px !important;
+          }
+          body.agy-reading-mode [role="combobox"],
+          body.agy-reading-mode textarea,
+          body.agy-reading-mode [id*="agentSidePanelInputBox"],
+          body.agy-reading-mode form:has([role="combobox"]),
+          body.agy-reading-mode div:has(> [role="combobox"]),
+          body.agy-reading-mode div:has(> * > [role="combobox"]) {
+            display: none !important;
+            height: 0 !important;
+            min-height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            opacity: 0 !important;
+            pointer-events: none !important;
           }
         `;
         document.head.appendChild(style);
@@ -796,21 +816,29 @@
       let isPromptHidden = false;
 
       function applyPromptVisibility() {
+        if (isPromptHidden) {
+          document.body.classList.add("agy-reading-mode");
+        } else {
+          document.body.classList.remove("agy-reading-mode");
+        }
+
         const box = document.querySelector('[role="combobox"], textarea');
         const card = box?.closest('form') ||
                      box?.closest('[class*="rounded-"], [class*="border-"]') ||
                      box?.parentElement?.parentElement;
-        if (!card) return;
+        const footer = card?.parentElement || box?.closest('[class*="p-"]');
 
-        if (isPromptHidden) {
-          card.style.display = "none";
-          const sc = document.querySelector('.overflow-y-auto');
-          if (sc) sc.style.paddingBottom = "20px";
-        } else {
-          card.style.display = "";
-          card.style.marginBottom = "54px";
-          const sc = document.querySelector('.overflow-y-auto');
-          if (sc) sc.style.paddingBottom = "120px";
+        if (card) {
+          card.style.display = isPromptHidden ? "none" : "";
+          if (!isPromptHidden) card.style.marginBottom = "54px";
+        }
+        if (footer && footer !== document.body) {
+          footer.style.display = isPromptHidden ? "none" : "";
+        }
+
+        const sc = document.querySelector('.overflow-y-auto');
+        if (sc) {
+          sc.style.paddingBottom = isPromptHidden ? "8px" : "120px";
         }
       }
 
@@ -823,7 +851,7 @@
 
       // 4. Continuously ensure the prompt card is lifted 54px above Android navigation bar
       function liftPromptCard() {
-        if (isPromptHidden) return;
+        if (isPromptHidden || document.body.classList.contains("agy-reading-mode")) return;
         const box = document.querySelector('[role="combobox"], textarea');
         if (!box) return;
         
