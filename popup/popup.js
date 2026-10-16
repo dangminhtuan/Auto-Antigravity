@@ -18,8 +18,8 @@ const elBtnClear   = document.getElementById("btn-clear-log");
 async function loadSettings() {
   const settings = await chrome.storage.sync.get({
     enabled: true,
-    delaySafe: 5,
-    delayDangerous: 120,
+    delaySafe: 1,
+    delayDangerous: 1,
     targetOption: 4,
   });
 

@@ -40,8 +40,8 @@
 
   const DEFAULT_SETTINGS = {
     enabled: true,
-    delaySafe: 5,
-    delayDangerous: 120,
+    delaySafe: 1,
+    delayDangerous: 1,
     targetOption: 4,
   };
 
@@ -83,12 +83,12 @@
     }
   }
 
-  function updateBar(htmlContent, bg = "#0f172a", text = "#38bdf8", border = "#0284c7", autoHideMs = 0) {
+  function updateBar(htmlContent, colorHint = "info", autoHideMs = 0) {
     // If we are in an iframe, relay the status to the top frame
     if (!isTop) {
       try {
         window.top.postMessage(
-          { type: "AGY_UPDATE_BAR", htmlContent, bg, text, border, autoHideMs },
+          { type: "AGY_UPDATE_BAR", htmlContent, colorHint, autoHideMs },
           "*"
         );
       } catch (e) {}
@@ -100,30 +100,45 @@
       bar = document.createElement("div");
       bar.id = "agy-debug-bar";
       bar.style.cssText = `
-        position: fixed; top: 54px; right: 24px;
-        z-index: 2147483647; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        font-size: 11px; font-weight: 500; padding: 6px 14px; border-radius: 8px;
-        transition: opacity .35s ease, transform .35s ease; box-shadow: 0 4px 16px rgba(0,0,0,0.45);
-        max-width: 440px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        pointer-events: auto; display: flex; align-items: center; gap: 8px;
-        opacity: 0; transform: translateY(-6px);
+        position: fixed; top: 8px; right: 10px;
+        z-index: 2147483647;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-size: 11px; font-weight: 500;
+        padding: 5px 12px; border-radius: 20px;
+        max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        display: flex; align-items: center; gap: 6px;
+        pointer-events: none;
+        opacity: 0; transform: translateY(-8px);
+        transition: opacity 0.3s ease, transform 0.3s ease;
+        /* Glassmorphism */
+        background: rgba(0, 0, 0, 0.12);
+        backdrop-filter: blur(12px) saturate(140%);
+        -webkit-backdrop-filter: blur(12px) saturate(140%);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        color: rgba(255, 255, 255, 0.6);
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
       `;
       document.body.appendChild(bar);
     }
 
     clearTimeout(hideBarTimer);
 
-    bar.style.background = bg;
-    bar.style.color = text;
-    bar.style.border = `1px solid ${border}`;
-    bar.style.opacity = "1";
-    bar.style.transform = "translateY(0)";
-    bar.style.pointerEvents = "auto";
+    // Color tint via border-left only (subtle, not block color)
+    const tints = {
+      success: "rgba(52, 211, 153, 0.5)",
+      warning: "rgba(251, 191, 36, 0.5)",
+      info:    "rgba(56, 189, 248, 0.5)",
+    };
+    bar.style.borderLeftColor = tints[colorHint] || tints.info;
+    bar.style.borderLeftWidth = "3px";
 
-    const newHTML = `⚡ <strong>AGY Auto-Approve:</strong> ${htmlContent}`;
+    const newHTML = `⚡ ${htmlContent}`;
     if (bar.innerHTML !== newHTML) {
       bar.innerHTML = newHTML;
     }
+
+    bar.style.opacity = "0.85";
+    bar.style.transform = "translateY(0)";
 
     if (autoHideMs > 0) {
       hideBarTimer = setTimeout(() => {
@@ -141,14 +156,7 @@
         if (content.includes("Dang cho dialog") || content.includes("Chua thay")) {
           return;
         }
-
-        updateBar(
-          e.data.htmlContent,
-          e.data.bg,
-          e.data.text,
-          e.data.border,
-          e.data.autoHideMs || 0
-        );
+        updateBar(e.data.htmlContent, e.data.colorHint || "info", e.data.autoHideMs || 0);
       }
     });
   }
@@ -411,12 +419,12 @@
     countdownTimer = null;
     removeCountdown();
     isProcessing = false;
-    updateBar("Nguoi dung da bam Huy bo qua lan nay", "#451a03", "#fbbf24", "#d97706", 3000);
+    updateBar("Nguoi dung da bam Huy — bo qua lan nay", "warning", 3000);
   }
 
   // ─── Approval Execution ───────────────────────────────────────────────────────
   async function executeApproval(optEl, submitBtn, fullText, settings, dialogKey) {
-    updateBar("Dang click Option 4...", "#451a03", "#fbbf24", "#d97706");
+    updateBar("Dang click Option 4...", "warning");
 
     // 1. Force click Option 4 row and its internal targets
     optEl.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -440,7 +448,7 @@
     await new Promise((r) => setTimeout(r, 400));
 
     // 2. Force click Submit
-    updateBar("Dang click Submit...", "#451a03", "#fbbf24", "#d97706");
+    updateBar("Dang click Submit...", "warning");
     forceClick(submitBtn);
 
     const form = submitBtn.closest("form");
@@ -458,7 +466,7 @@
       await new Promise((r) => setTimeout(r, 400));
     }
 
-    updateBar("✓ Da tu dong phe duyet thanh cong!", "#064e3b", "#34d399", "#059669", 3500);
+    updateBar("✓ Da phe duyet!", "success", 3000);
 
     await logEvent({
       time: new Date().toISOString(),
@@ -495,7 +503,7 @@
 
     const settings = await getSettings();
     if (!settings.enabled) {
-      updateBar("Extension dang bi TAT trong popup", "#451a03", "#fbbf24", "#d97706");
+      updateBar("Extension dang bi TAT trong popup", "warning");
       return;
     }
 
@@ -509,10 +517,8 @@
     settings._usedDelay = delay;
 
     updateBar(
-      `Phat hien Approval! [${classification.toUpperCase()}] — phe duyet sau ${delay}s...`,
-      classification === "safe" ? "#064e3b" : "#451a03",
-      classification === "safe" ? "#34d399" : "#fbbf24",
-      classification === "safe" ? "#059669" : "#d97706"
+      `[${classification.toUpperCase()}] Phe duyet sau ${delay}s...`,
+      classification === "safe" ? "success" : "warning"
     );
 
     let remaining = delay;

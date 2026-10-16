@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AGY Auto-Approve",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Tu dong phe duyet approval prompt cua Google Antigravity voi countdown co the huy.",
   "permissions": [
     "storage",
