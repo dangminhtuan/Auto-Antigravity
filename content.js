@@ -41,6 +41,10 @@
     if (debugBar) debugBar.remove();
     const enhStyle = document.getElementById("agy-mobile-enhancements");
     if (enhStyle) enhStyle.remove();
+    const bigClose = document.getElementById("agy-big-close-image-btn");
+    if (bigClose) bigClose.remove();
+    const topClose = document.getElementById("agy-top-close-image-btn");
+    if (topClose) topClose.remove();
     for (const l of _listeners) {
       l.target.removeEventListener(l.type, l.handler, l.options);
     }
@@ -107,6 +111,26 @@
       setTimeout(() => {
         if (bar.style.opacity === "0") bar.style.display = "none";
       }, 250);
+    }
+  }
+
+  function hideControlContainer() {
+    const container = document.getElementById("agy-control-container");
+    if (container) {
+      container.style.opacity = "0";
+      container.style.pointerEvents = "none";
+      container.style.transform = "translateY(-12px)";
+      container.style.transition = "opacity 0.25s ease, transform 0.25s ease";
+    }
+  }
+
+  function restoreControlContainer() {
+    const container = document.getElementById("agy-control-container");
+    if (container) {
+      container.style.opacity = "1";
+      container.style.pointerEvents = "none"; // container itself is pointer-events none
+      container.style.transform = "translateY(0)";
+      container.style.transition = "opacity 0.25s ease, transform 0.25s ease";
     }
   }
 
@@ -185,6 +209,13 @@
         }
         updateBar(e.data.htmlContent, e.data.colorHint || "info", e.data.autoHideMs || 0);
       }
+      if (e.data && e.data.type === "AGY_IMAGE_MODAL") {
+        if (e.data.isOpen) {
+          hideControlContainer();
+        } else {
+          restoreControlContainer();
+        }
+      }
     });
 
     // Glassmorphism toggle button to hide/show prompt input area
@@ -236,8 +267,12 @@
 
     if (document.body) {
       createPromptToggleBtn();
+      initImageModalHandler();
     } else {
-      addSafeListener(window, "DOMContentLoaded", createPromptToggleBtn);
+      addSafeListener(window, "DOMContentLoaded", () => {
+        createPromptToggleBtn();
+        initImageModalHandler();
+      });
     }
   }
 
@@ -624,6 +659,249 @@
     }, 1000);
   }
 
+  // ─── Image Lightbox / Modal Auto-Detection & Ergonomic Close Buttons ──────────
+  function initImageModalHandler() {
+    let activeModal = null;
+
+    function findActiveImageModal() {
+      // 1. Look for zoom percentage indicator (e.g. text "100%" with zoom controls)
+      const allEls = document.querySelectorAll("div, span, button, p");
+      for (const el of allEls) {
+        if (el.children.length === 0 && (el.textContent || "").trim() === "100%") {
+          let p = el.parentElement;
+          while (p && p !== document.body) {
+            if (p.querySelector("img")) {
+              const rect = p.getBoundingClientRect();
+              if (rect.width > 200 && rect.height > 200) return p;
+            }
+            p = p.parentElement;
+          }
+        }
+      }
+
+      // 2. Look for open dialog or modal overlay containing an enlarged img
+      const dialogs = document.querySelectorAll('[role="dialog"], [aria-modal="true"], [class*="modal"], [class*="lightbox"], [class*="overlay"], [class*="preview"], [class*="fullscreen"]');
+      for (const d of dialogs) {
+        if (isElementVisible(d)) {
+          const img = d.querySelector("img");
+          if (img && isElementVisible(img)) {
+            const rect = d.getBoundingClientRect();
+            if (rect.width > window.innerWidth * 0.5 && rect.height > window.innerHeight * 0.4) {
+              return d;
+            }
+          }
+        }
+      }
+
+      // 3. Look for fixed/absolute containers covering the viewport with an img
+      const fixedDivs = document.querySelectorAll("div");
+      for (const f of fixedDivs) {
+        if (f.id && f.id.startsWith("agy-")) continue;
+        const rect = f.getBoundingClientRect();
+        if (rect.width > window.innerWidth * 0.7 && rect.height > window.innerHeight * 0.5) {
+          const style = window.getComputedStyle(f);
+          if ((style.position === "fixed" || style.position === "absolute") && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0") {
+            const img = f.querySelector("img");
+            if (img && isElementVisible(img)) {
+              return f;
+            }
+          }
+        }
+      }
+
+      return null;
+    }
+
+    function executeCloseImage(modal) {
+      // 1. Try finding and clicking native close button
+      const closeSelectors = [
+        'button[aria-label*="close" i]',
+        'button[title*="close" i]',
+        'button[class*="close" i]',
+        '[role="button"][aria-label*="close" i]',
+        '[role="button"][title*="close" i]',
+        'button:has(svg)',
+        '[role="button"]:has(svg)',
+      ];
+
+      let clicked = false;
+      if (modal) {
+        for (const sel of closeSelectors) {
+          try {
+            const btn = modal.querySelector(sel);
+            if (btn && isElementVisible(btn)) {
+              forceClick(btn);
+              clicked = true;
+              break;
+            }
+          } catch (e) {}
+        }
+      }
+
+      if (!clicked) {
+        for (const sel of closeSelectors) {
+          try {
+            const btn = document.querySelector(sel);
+            if (btn && isElementVisible(btn)) {
+              forceClick(btn);
+              clicked = true;
+              break;
+            }
+          } catch (e) {}
+        }
+      }
+
+      // 2. Dispatch Escape key event
+      const keyOpts = { key: "Escape", code: "Escape", keyCode: 27, which: 27, bubbles: true, cancelable: true, composed: true };
+      const escDown = new KeyboardEvent("keydown", keyOpts);
+      const escUp = new KeyboardEvent("keyup", keyOpts);
+
+      if (modal) {
+        modal.dispatchEvent(escDown);
+        modal.dispatchEvent(escUp);
+      }
+      document.dispatchEvent(escDown);
+      document.dispatchEvent(escUp);
+      window.dispatchEvent(escDown);
+      window.dispatchEvent(escUp);
+
+      setTimeout(checkState, 150);
+      setTimeout(checkState, 350);
+    }
+
+    function createBigCloseButtons(modal) {
+      if (!document.getElementById("agy-big-close-image-btn")) {
+        const pill = document.createElement("button");
+        pill.id = "agy-big-close-image-btn";
+        pill.innerHTML = `
+          <span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:#ef4444;color:#fff;font-size:12.5px;font-weight:bold;margin-right:8px;flex-shrink:0;">✕</span>
+          <span style="letter-spacing:0.3px;">Đóng ảnh</span>
+        `;
+        pill.style.cssText = `
+          position: fixed; bottom: 24px; right: 20px;
+          z-index: 2147483647;
+          display: flex; align-items: center; justify-content: center;
+          padding: 10px 20px; border-radius: 28px;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          font-size: 14px; font-weight: 600;
+          color: #ffffff;
+          background: rgba(15, 23, 42, 0.88);
+          backdrop-filter: blur(16px) saturate(160%);
+          -webkit-backdrop-filter: blur(16px) saturate(160%);
+          border: 1px solid rgba(255, 255, 255, 0.3);
+          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+          cursor: pointer; user-select: none;
+          touch-action: manipulation;
+          transition: transform 0.15s ease, background 0.15s ease;
+        `;
+        pill.addEventListener("pointerdown", () => {
+          pill.style.transform = "scale(0.94)";
+        });
+        pill.addEventListener("pointerup", () => {
+          pill.style.transform = "scale(1)";
+        });
+        addSafeListener(pill, "click", (e) => {
+          e.stopPropagation();
+          executeCloseImage(modal);
+        });
+        (document.body || document.documentElement).appendChild(pill);
+      }
+
+      if (!document.getElementById("agy-top-close-image-btn")) {
+        const topBtn = document.createElement("button");
+        topBtn.id = "agy-top-close-image-btn";
+        topBtn.innerHTML = "✕";
+        topBtn.style.cssText = `
+          position: fixed; top: 16px; left: 16px;
+          z-index: 2147483647;
+          width: 42px; height: 42px; border-radius: 50%;
+          display: flex; align-items: center; justify-content: center;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          font-size: 19px; font-weight: 600;
+          color: #ffffff;
+          background: rgba(15, 23, 42, 0.82);
+          backdrop-filter: blur(16px);
+          -webkit-backdrop-filter: blur(16px);
+          border: 1px solid rgba(255, 255, 255, 0.25);
+          box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+          cursor: pointer; user-select: none;
+          touch-action: manipulation;
+          transition: transform 0.15s ease;
+        `;
+        topBtn.addEventListener("pointerdown", () => {
+          topBtn.style.transform = "scale(0.94)";
+        });
+        topBtn.addEventListener("pointerup", () => {
+          topBtn.style.transform = "scale(1)";
+        });
+        addSafeListener(topBtn, "click", (e) => {
+          e.stopPropagation();
+          executeCloseImage(modal);
+        });
+        (document.body || document.documentElement).appendChild(topBtn);
+      }
+    }
+
+    function removeBigCloseButtons() {
+      const pill = document.getElementById("agy-big-close-image-btn");
+      if (pill) pill.remove();
+      const topBtn = document.getElementById("agy-top-close-image-btn");
+      if (topBtn) topBtn.remove();
+    }
+
+    function attachBackdropDismiss(modal) {
+      if (!modal || modal.__agy_backdrop_attached) return;
+      modal.__agy_backdrop_attached = true;
+      addSafeListener(modal, "pointerdown", (e) => {
+        const target = e.target;
+        if (target.id && target.id.startsWith("agy-")) return;
+        if (target.tagName === "IMG" || target.closest("img")) return;
+        if (target.closest("button, [role='button'], [class*='toolbar'], [class*='control']")) return;
+        executeCloseImage(modal);
+      });
+    }
+
+    function checkState() {
+      const modal = findActiveImageModal();
+      if (modal) {
+        activeModal = modal;
+        if (!isTop) {
+          try {
+            window.top.postMessage({ type: "AGY_IMAGE_MODAL", isOpen: true }, "*");
+          } catch (e) {}
+        } else {
+          hideControlContainer();
+        }
+        createBigCloseButtons(modal);
+        attachBackdropDismiss(modal);
+      } else {
+        if (activeModal) {
+          activeModal = null;
+          if (!isTop) {
+            try {
+              window.top.postMessage({ type: "AGY_IMAGE_MODAL", isOpen: false }, "*");
+            } catch (e) {}
+          } else {
+            restoreControlContainer();
+          }
+          removeBigCloseButtons();
+        }
+      }
+    }
+
+    setInterval(checkState, 400);
+
+    addSafeListener(document, "click", (e) => {
+      if (e.target.tagName === "IMG" || e.target.closest("img, [class*='image']")) {
+        setTimeout(checkState, 100);
+        setTimeout(checkState, 300);
+        setTimeout(checkState, 600);
+      }
+    });
+
+    checkState();
+  }
+
   // ─── Polling, Mutation, Keyboard — ONLY in the app iframe ────────────────────
   // isTop frame only renders the debug bar via postMessage.
   // Scanning, observing, and keyboard handling only run inside the actual iframe.
@@ -636,7 +914,10 @@
         return (
           node.id === "agy-debug-bar" ||
           node.id === "agy-autoapprove-overlay" ||
-          (node.closest && node.closest("#agy-debug-bar, #agy-autoapprove-overlay"))
+          node.id === "agy-control-container" ||
+          node.id === "agy-big-close-image-btn" ||
+          node.id === "agy-top-close-image-btn" ||
+          (node.closest && node.closest("#agy-debug-bar, #agy-autoapprove-overlay, #agy-control-container, #agy-big-close-image-btn, #agy-top-close-image-btn"))
         );
       });
       if (isOnlyOurUI) return;
@@ -896,6 +1177,7 @@
 
     initMobileKeyboardHandler();
     initMobileEnhancements();
+    initImageModalHandler();
     scanAndProcess();
   }
 
