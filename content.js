@@ -616,7 +616,9 @@
 
           clearTimeout(scrollTimer);
           scrollTimer = setTimeout(() => {
-            const target = el.closest("[class*='chat'], [class*='input'], [class*='prompt'], [id*='InputBox']") || el;
+            const target = el.closest("form") ||
+                           el.closest("[class*='rounded-'], [class*='border-']") ||
+                           el.closest("[class*='chat'], [class*='input'], [class*='prompt'], [id*='InputBox']") || el;
             target.scrollIntoView({ behavior: "smooth", block: "center" });
           }, 320);
         }
@@ -658,11 +660,104 @@
       });
     }
 
+    // ─── Mobile UI Polish: Send Button Lift, Big Fonts, Table Cards ─────────
+    function initMobileEnhancements() {
+      const isTouch = "ontouchstart" in window || navigator.maxTouchPoints > 0;
+      if (!isTouch) return;
+
+      const styleId = "agy-mobile-enhancements";
+      if (!document.getElementById(styleId)) {
+        const style = document.createElement("style");
+        style.id = styleId;
+        style.textContent = `
+          /* 1. Large readable text for mobile */
+          [class*="prose"], [class*="markdown"], [class*="message"], p, li {
+            font-size: 16px !important;
+            line-height: 1.65 !important;
+          }
+          [role="combobox"], textarea, input {
+            font-size: 16px !important;
+          }
+          pre, code {
+            font-size: 13.5px !important;
+          }
+
+          /* 2. Responsive Tables -> Touch-friendly Vertical Cards */
+          table {
+            display: block !important;
+            width: 100% !important;
+            border: none !important;
+            margin: 12px 0 !important;
+          }
+          thead {
+            display: none !important;
+          }
+          tbody {
+            display: flex !important;
+            flex-direction: column !important;
+            gap: 12px !important;
+            width: 100% !important;
+          }
+          tr {
+            display: flex !important;
+            flex-direction: column !important;
+            padding: 12px 14px !important;
+            background: rgba(120, 120, 120, 0.08) !important;
+            border: 1px solid rgba(120, 120, 120, 0.22) !important;
+            border-radius: 12px !important;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12) !important;
+            width: 100% !important;
+            box-sizing: border-box !important;
+          }
+          td {
+            display: flex !important;
+            justify-content: space-between !important;
+            align-items: center !important;
+            padding: 7px 0 !important;
+            border: none !important;
+            border-bottom: 1px dashed rgba(120, 120, 120, 0.18) !important;
+            font-size: 15px !important;
+            text-align: right !important;
+            width: 100% !important;
+          }
+          td:last-child {
+            border-bottom: none !important;
+          }
+
+          /* 3. Extra bottom padding so last message and prompt card are never covered */
+          .overflow-y-auto {
+            padding-bottom: 120px !important;
+          }
+        `;
+        document.head.appendChild(style);
+      }
+
+      // 4. Continuously ensure the prompt card is lifted 54px above Android navigation bar
+      function liftPromptCard() {
+        const box = document.querySelector('[role="combobox"], textarea');
+        if (!box) return;
+        
+        // Find outer prompt card container
+        const card = box.closest('form') ||
+                     box.closest('[class*="rounded-"], [class*="border-"]') ||
+                     box.parentElement?.parentElement;
+
+        if (card && card.style.marginBottom !== "54px") {
+          card.style.marginBottom = "54px";
+          card.style.transition = "margin-bottom 0.25s ease";
+        }
+      }
+
+      setInterval(liftPromptCard, 1000);
+      liftPromptCard();
+    }
+
     initMobileKeyboardHandler();
+    initMobileEnhancements();
     scanAndProcess();
   }
 
-  console.log(`[AGY Auto-Approve] v18 active | frame: ${isTop ? "TOP" : "IFRAME"}`);
+  console.log(`[AGY Auto-Approve] v19 active | frame: ${isTop ? "TOP" : "IFRAME"}`);
 })();
 
 
