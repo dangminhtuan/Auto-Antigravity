@@ -267,12 +267,8 @@
 
     if (document.body) {
       createPromptToggleBtn();
-      initImageModalHandler();
     } else {
-      addSafeListener(window, "DOMContentLoaded", () => {
-        createPromptToggleBtn();
-        initImageModalHandler();
-      });
+      addSafeListener(window, "DOMContentLoaded", createPromptToggleBtn);
     }
   }
 
@@ -664,48 +660,50 @@
     let activeModal = null;
 
     function findActiveImageModal() {
-      // 1. Look for zoom percentage indicator (e.g. text "100%" with zoom controls)
-      const allEls = document.querySelectorAll("div, span, button, p");
-      for (const el of allEls) {
-        if (el.children.length === 0 && (el.textContent || "").trim() === "100%") {
-          let p = el.parentElement;
-          while (p && p !== document.body) {
-            if (p.querySelector("img")) {
-              const rect = p.getBoundingClientRect();
-              if (rect.width > 200 && rect.height > 200) return p;
-            }
-            p = p.parentElement;
-          }
-        }
-      }
+      // 1. MUST NOT run in top frame (top frame never has image lightbox)
+      if (isTop) return null;
 
-      // 2. Look for open dialog or modal overlay containing an enlarged img
-      const dialogs = document.querySelectorAll('[role="dialog"], [aria-modal="true"], [class*="modal"], [class*="lightbox"], [class*="overlay"], [class*="preview"], [class*="fullscreen"]');
-      for (const d of dialogs) {
-        if (isElementVisible(d)) {
-          const img = d.querySelector("img");
-          if (img && isElementVisible(img)) {
-            const rect = d.getBoundingClientRect();
-            if (rect.width > window.innerWidth * 0.5 && rect.height > window.innerHeight * 0.4) {
-              return d;
-            }
-          }
-        }
-      }
+      // 2. Candidate modals must be dialogs/overlays
+      const candidates = document.querySelectorAll(
+        'div[role="dialog"], [aria-modal="true"], dialog[open], div.fixed.inset-0, div[class*="lightbox"], div[class*="image-preview"]'
+      );
 
-      // 3. Look for fixed/absolute containers covering the viewport with an img
-      const fixedDivs = document.querySelectorAll("div");
-      for (const f of fixedDivs) {
-        if (f.id && f.id.startsWith("agy-")) continue;
-        const rect = f.getBoundingClientRect();
-        if (rect.width > window.innerWidth * 0.7 && rect.height > window.innerHeight * 0.5) {
-          const style = window.getComputedStyle(f);
-          if ((style.position === "fixed" || style.position === "absolute") && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0") {
-            const img = f.querySelector("img");
-            if (img && isElementVisible(img)) {
-              return f;
-            }
-          }
+      for (const modal of candidates) {
+        // Exclude our own extension UI
+        if (modal.id && modal.id.startsWith("agy-")) continue;
+        if (modal.closest("#agy-control-container, #agy-autoapprove-overlay")) continue;
+
+        // MUST NOT be inside the chat message scroll container
+        if (modal.closest('.overflow-y-auto, .overflow-y-scroll, [class*="conversation"]')) {
+          continue;
+        }
+
+        // Must be visible and cover at least 50% width and 40% height
+        const rect = modal.getBoundingClientRect();
+        if (rect.width < window.innerWidth * 0.5 || rect.height < window.innerHeight * 0.4) {
+          continue;
+        }
+        const style = window.getComputedStyle(modal);
+        if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+          continue;
+        }
+
+        // Must contain an enlarged image (not avatar <= 48px or googleusercontent avatar)
+        const imgs = Array.from(modal.querySelectorAll("img")).filter((img) => {
+          const ir = img.getBoundingClientRect();
+          const isAvatar = (img.src || "").includes("googleusercontent.com/a/");
+          return ir.width > 120 && ir.height > 120 && !isAvatar;
+        });
+
+        if (imgs.length === 0) continue;
+
+        // Must have Zoom toolbar or Close button or zoom percentage text
+        const hasZoomOrClose = modal.querySelector(
+          'button[aria-label*="close" i], button[title*="close" i], button[aria-label*="zoom" i], button:has(svg)'
+        ) || /\b\d{2,3}%\b/.test(modal.textContent || "");
+
+        if (hasZoomOrClose) {
+          return modal;
         }
       }
 
@@ -805,40 +803,6 @@
           executeCloseImage(modal);
         });
         (document.body || document.documentElement).appendChild(pill);
-      }
-
-      if (!document.getElementById("agy-top-close-image-btn")) {
-        const topBtn = document.createElement("button");
-        topBtn.id = "agy-top-close-image-btn";
-        topBtn.innerHTML = "✕";
-        topBtn.style.cssText = `
-          position: fixed; top: 16px; left: 16px;
-          z-index: 2147483647;
-          width: 42px; height: 42px; border-radius: 50%;
-          display: flex; align-items: center; justify-content: center;
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-          font-size: 19px; font-weight: 600;
-          color: #ffffff;
-          background: rgba(15, 23, 42, 0.82);
-          backdrop-filter: blur(16px);
-          -webkit-backdrop-filter: blur(16px);
-          border: 1px solid rgba(255, 255, 255, 0.25);
-          box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
-          cursor: pointer; user-select: none;
-          touch-action: manipulation;
-          transition: transform 0.15s ease;
-        `;
-        topBtn.addEventListener("pointerdown", () => {
-          topBtn.style.transform = "scale(0.94)";
-        });
-        topBtn.addEventListener("pointerup", () => {
-          topBtn.style.transform = "scale(1)";
-        });
-        addSafeListener(topBtn, "click", (e) => {
-          e.stopPropagation();
-          executeCloseImage(modal);
-        });
-        (document.body || document.documentElement).appendChild(topBtn);
       }
     }
 
