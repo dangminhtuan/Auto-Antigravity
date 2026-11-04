@@ -1,10 +1,9 @@
 /**
- * content.js — AGY Auto-Approve v14
+ * content.js — AGY Auto-Approve v15
  *
- * Updates in v14:
- * 1. Zero-F5 Live Reloading: Added a __AGY_CLEANUP function that destroys the old instance
- *    when the extension is updated and re-injected, completely eliminating the need to F5 the page!
- * 2. Layout Thrashing & URL Bar Fix: Uses absolute maxHeight instead of relative diffs to prevent false-positive keyboard closures caused by mobile URL bar hiding during scroll.
+ * Updates in v15:
+ * 1. Moved notification bar and reading mode toggle down to the bottom empty space (54px mobile gap).
+ * 2. Added 3 circular quick-action buttons: u, o, d (lowercase) for instant 1-tap submission.
  */
 
 (() => {
@@ -92,10 +91,10 @@
       container = document.createElement("div");
       container.id = "agy-control-container";
       container.style.cssText = `
-        position: fixed; top: 58px; right: 16px;
+        position: fixed; bottom: 8px; right: 12px;
         z-index: 2147483647;
         display: flex; flex-direction: column; align-items: flex-end;
-        gap: 8px;
+        gap: 6px;
         pointer-events: none;
       `;
       (document.body || document.documentElement).appendChild(container);
@@ -107,7 +106,7 @@
     const bar = document.getElementById("agy-debug-bar");
     if (bar) {
       bar.style.opacity = "0";
-      bar.style.transform = "translateY(-6px)";
+      bar.style.transform = "translateY(6px)";
       setTimeout(() => {
         if (bar.style.opacity === "0") bar.style.display = "none";
       }, 250);
@@ -119,7 +118,7 @@
     if (container) {
       container.style.opacity = "0";
       container.style.pointerEvents = "none";
-      container.style.transform = "translateY(-12px)";
+      container.style.transform = "translateY(12px)";
       container.style.transition = "opacity 0.25s ease, transform 0.25s ease";
     }
   }
@@ -154,18 +153,18 @@
       bar.style.cssText = `
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         font-size: 11.5px; font-weight: 500;
-        padding: 6px 14px; border-radius: 20px;
-        max-width: 340px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        padding: 5px 12px; border-radius: 18px;
+        max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         display: none; align-items: center; gap: 6px;
         pointer-events: none;
-        opacity: 0; transform: translateY(-6px);
+        opacity: 0; transform: translateY(6px);
         transition: opacity 0.25s ease, transform 0.25s ease;
-        background: rgba(15, 23, 42, 0.6);
+        background: rgba(15, 23, 42, 0.7);
         backdrop-filter: blur(16px) saturate(160%);
         -webkit-backdrop-filter: blur(16px) saturate(160%);
         border: 1px solid rgba(255, 255, 255, 0.2);
-        color: rgba(255, 255, 255, 0.9);
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+        color: rgba(255, 255, 255, 0.95);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
       `;
       container.insertBefore(bar, container.firstChild);
     }
@@ -216,40 +215,63 @@
           restoreControlContainer();
         }
       }
+      if (e.data && e.data.type === "AGY_PROMPT_STATE") {
+        const toggleBtn = document.getElementById("agy-toggle-prompt-btn");
+        if (toggleBtn) {
+          const hidden = !!e.data.hidden;
+          toggleBtn.innerHTML = hidden ? "✏️ Soạn thảo" : "📖 Đọc tràn viền";
+          toggleBtn.style.color = hidden ? "rgba(56, 189, 248, 0.95)" : "rgba(255, 255, 255, 0.88)";
+          toggleBtn.style.borderColor = hidden ? "rgba(56, 189, 248, 0.45)" : "rgba(255, 255, 255, 0.18)";
+        }
+      }
     });
 
-    // Glassmorphism toggle button to hide/show prompt input area
-    function createPromptToggleBtn() {
-      if (document.getElementById("agy-toggle-prompt-btn")) return;
+    // Glassmorphism bottom control dock (Toggle Reading Mode + Quick Buttons u, o, d)
+    function initBottomControlDock() {
+      if (document.getElementById("agy-dock-row")) return;
       const container = getControlContainer();
 
-      const btn = document.createElement("button");
-      btn.id = "agy-toggle-prompt-btn";
-      btn.innerHTML = "📖 Đọc tràn viền (Ẩn ô)";
-      btn.style.cssText = `
+      const row = document.createElement("div");
+      row.id = "agy-dock-row";
+      row.style.cssText = `
+        display: flex; align-items: center; gap: 5px;
         pointer-events: auto;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        font-size: 12px; font-weight: 600;
-        padding: 6px 14px; border-radius: 20px;
         background: rgba(15, 23, 42, 0.55);
         backdrop-filter: blur(16px) saturate(160%);
         -webkit-backdrop-filter: blur(16px) saturate(160%);
-        border: 1px solid rgba(255, 255, 255, 0.22);
-        color: rgba(255, 255, 255, 0.85);
-        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
-        cursor: pointer;
-        display: flex; align-items: center; gap: 5px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 22px;
+        padding: 3px 6px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
         user-select: none;
-        transition: all 0.25s ease;
+      `;
+
+      // 1. Reading Mode Toggle Button
+      const toggleBtn = document.createElement("button");
+      toggleBtn.id = "agy-toggle-prompt-btn";
+      toggleBtn.innerHTML = "📖 Đọc tràn viền";
+      toggleBtn.title = "Ẩn hoặc hiện ô nhập để tối đa không gian đọc";
+      toggleBtn.style.cssText = `
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-size: 11.5px; font-weight: 600;
+        padding: 5px 10px; border-radius: 16px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        color: rgba(255, 255, 255, 0.88);
+        cursor: pointer;
+        display: flex; align-items: center; gap: 4px;
+        touch-action: manipulation;
+        transition: all 0.2s ease;
+        white-space: nowrap;
       `;
 
       let isPromptHidden = false;
-      addSafeListener(btn, "click", (e) => {
+      addSafeListener(toggleBtn, "click", (e) => {
         e.stopPropagation();
         isPromptHidden = !isPromptHidden;
-        btn.innerHTML = isPromptHidden ? "✏️ Soạn thảo (Hiện ô)" : "📖 Đọc tràn viền (Ẩn ô)";
-        btn.style.color = isPromptHidden ? "rgba(56, 189, 248, 0.95)" : "rgba(255, 255, 255, 0.85)";
-        btn.style.borderColor = isPromptHidden ? "rgba(56, 189, 248, 0.45)" : "rgba(255, 255, 255, 0.22)";
+        toggleBtn.innerHTML = isPromptHidden ? "✏️ Soạn thảo" : "📖 Đọc tràn viền";
+        toggleBtn.style.color = isPromptHidden ? "rgba(56, 189, 248, 0.95)" : "rgba(255, 255, 255, 0.88)";
+        toggleBtn.style.borderColor = isPromptHidden ? "rgba(56, 189, 248, 0.45)" : "rgba(255, 255, 255, 0.18)";
 
         // Broadcast to all iframes
         document.querySelectorAll("iframe").forEach((ifr) => {
@@ -262,13 +284,83 @@
         });
       });
 
-      container.appendChild(btn);
+      row.appendChild(toggleBtn);
+
+      // 2. Subtle Divider
+      const divider = document.createElement("div");
+      divider.style.cssText = "width: 1px; height: 16px; background: rgba(255, 255, 255, 0.2); margin: 0 1px;";
+      row.appendChild(divider);
+
+      // 3. Quick Action Buttons: u, o, d (lowercase)
+      const shortcuts = [
+        { char: "u", color: "#38bdf8", bg: "rgba(56, 189, 248, 0.18)", border: "rgba(56, 189, 248, 0.45)", label: "Gửi nhanh 'u' (cài APK / update)" },
+        { char: "o", color: "#34d399", bg: "rgba(52, 211, 153, 0.18)", border: "rgba(52, 211, 153, 0.45)", label: "Gửi nhanh 'o' (đồng ý / proceed)" },
+        { char: "d", color: "#fbbf24", bg: "rgba(251, 191, 36, 0.18)", border: "rgba(251, 191, 36, 0.45)", label: "Gửi nhanh 'd' (đã gửi hình, chờ text)" },
+      ];
+
+      shortcuts.forEach(({ char, color, bg, border, label }) => {
+        const btn = document.createElement("button");
+        btn.id = `agy-quick-${char}`;
+        btn.textContent = char;
+        btn.title = label;
+        btn.style.cssText = `
+          width: 30px; height: 30px; border-radius: 50%;
+          display: flex; align-items: center; justify-content: center;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+          font-size: 14.5px; font-weight: 700;
+          color: ${color};
+          background: ${bg};
+          border: 1px solid ${border};
+          cursor: pointer;
+          box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+          touch-action: manipulation;
+          transition: transform 0.12s ease, filter 0.12s ease;
+        `;
+
+        btn.addEventListener("pointerdown", () => {
+          btn.style.transform = "scale(0.88)";
+          btn.style.filter = "brightness(1.2)";
+        });
+        btn.addEventListener("pointerup", () => {
+          btn.style.transform = "scale(1)";
+          btn.style.filter = "none";
+        });
+        btn.addEventListener("pointerleave", () => {
+          btn.style.transform = "scale(1)";
+          btn.style.filter = "none";
+        });
+
+        addSafeListener(btn, "click", (e) => {
+          e.stopPropagation();
+          updateBar(`Đã gửi '${char}'`, "info", 1500);
+
+          if (isPromptHidden) {
+            isPromptHidden = false;
+            toggleBtn.innerHTML = "📖 Đọc tràn viền";
+            toggleBtn.style.color = "rgba(255, 255, 255, 0.88)";
+            toggleBtn.style.borderColor = "rgba(255, 255, 255, 0.18)";
+          }
+
+          document.querySelectorAll("iframe").forEach((ifr) => {
+            try {
+              ifr.contentWindow?.postMessage({
+                type: "AGY_QUICK_SEND",
+                char: char,
+              }, "*");
+            } catch (err) {}
+          });
+        });
+
+        row.appendChild(btn);
+      });
+
+      container.appendChild(row);
     }
 
     if (document.body) {
-      createPromptToggleBtn();
+      initBottomControlDock();
     } else {
-      addSafeListener(window, "DOMContentLoaded", createPromptToggleBtn);
+      addSafeListener(window, "DOMContentLoaded", initBottomControlDock);
     }
   }
 
@@ -991,17 +1083,17 @@
       });
     }
 
-    // ─── Mobile UI Polish: Send Button Lift, Big Fonts, Table Cards ─────────
+    // ─── Mobile UI Polish, Reading Mode & Quick Command Handler ─────────────
     function initMobileEnhancements() {
       const isTouch = "ontouchstart" in window || navigator.maxTouchPoints > 0;
-      if (!isTouch) return;
 
       const styleId = "agy-mobile-enhancements";
       if (!document.getElementById(styleId)) {
         const style = document.createElement("style");
         style.id = styleId;
         style.textContent = `
-          /* 1. Large readable text for mobile (18px) */
+          /* 1. Large readable text for mobile (18px) - touch only */
+          ${isTouch ? `
           [class*="prose"], [class*="markdown"], [class*="message"], p, li {
             font-size: 18px !important;
             line-height: 1.7 !important;
@@ -1054,6 +1146,7 @@
           td:last-child {
             border-bottom: none !important;
           }
+          ` : ""}
 
           /* 3. Normal bottom padding when prompt is visible */
           body:not(.agy-reading-mode) .overflow-y-auto {
@@ -1091,7 +1184,7 @@
           document.body.classList.remove("agy-reading-mode");
         }
 
-        const box = document.querySelector('[role="combobox"], textarea');
+        const box = document.querySelector('[role="combobox"], textarea, input[type="text"]');
         const card = box?.closest('form') ||
                      box?.closest('[class*="rounded-"], [class*="border-"]') ||
                      box?.parentElement?.parentElement;
@@ -1099,7 +1192,7 @@
 
         if (card) {
           card.style.display = isPromptHidden ? "none" : "";
-          if (!isPromptHidden) card.style.marginBottom = "54px";
+          if (!isPromptHidden && isTouch) card.style.marginBottom = "54px";
         }
         if (footer && footer !== document.body) {
           footer.style.display = isPromptHidden ? "none" : "";
@@ -1111,17 +1204,114 @@
         }
       }
 
+      // Quick Send Handler: injects char, triggers React state, clicks Send arrow button
+      function handleQuickSend(char) {
+        if (isPromptHidden) {
+          isPromptHidden = false;
+          applyPromptVisibility();
+          try {
+            window.top.postMessage({ type: "AGY_PROMPT_STATE", hidden: false }, "*");
+          } catch (err) {}
+        }
+
+        const box = document.querySelector('[role="combobox"], textarea, input[type="text"]');
+        if (!box) return;
+
+        box.focus();
+
+        // 1. Insert character via React property setter
+        let inputSet = false;
+        try {
+          if (box instanceof HTMLTextAreaElement || box instanceof HTMLInputElement) {
+            const proto = box instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+            const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+            if (setter) {
+              setter.call(box, char);
+              inputSet = true;
+            }
+          }
+        } catch (e) {}
+
+        if (!inputSet) {
+          box.value = char;
+        }
+
+        if (box.getAttribute("contenteditable") === "true" || box.getAttribute("role") === "combobox") {
+          try {
+            document.execCommand("selectAll", false, null);
+            document.execCommand("insertText", false, char);
+          } catch (e) {}
+          if (box.textContent !== char) {
+            box.textContent = char;
+          }
+        }
+
+        // 2. Dispatch events for React
+        box.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+        box.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+        box.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: char, inputType: "insertText" }));
+        box.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: char }));
+        box.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, cancelable: true, key: char }));
+
+        // 3. Find and click Send button (blue circular button with arrow or submit)
+        setTimeout(() => {
+          const form = box.closest("form") ||
+                       box.closest('[class*="rounded-"], [class*="border-"]') ||
+                       box.parentElement?.parentElement;
+
+          let sendBtn = null;
+          if (form) {
+            sendBtn = form.querySelector('button[aria-label*="send" i], button[title*="send" i], button[type="submit"]');
+            if (!sendBtn) {
+              const btns = Array.from(form.querySelectorAll("button"));
+              for (const b of btns) {
+                const aria = (b.getAttribute("aria-label") || b.title || "").toLowerCase();
+                if (aria.includes("model") || aria.includes("context") || aria.includes("mic") || aria.includes("audio")) {
+                  continue;
+                }
+                if (b.querySelector("svg") && !b.disabled) {
+                  sendBtn = b;
+                  break;
+                }
+              }
+            }
+          }
+
+          if (!sendBtn) {
+            sendBtn = document.querySelector('button[aria-label*="send" i], button[title*="send" i], button[aria-label*="gửi" i]');
+          }
+
+          if (sendBtn) {
+            sendBtn.disabled = false;
+            forceClick(sendBtn);
+          } else {
+            const enterDown = new KeyboardEvent("keydown", {
+              key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true
+            });
+            box.dispatchEvent(enterDown);
+          }
+
+          setTimeout(() => {
+            try { box.blur(); } catch (e) {}
+          }, 150);
+        }, 120);
+      }
+
+      // Listen for broadcasts from top frame
       addSafeListener(window, "message", (e) => {
         if (e.data && e.data.type === "AGY_TOGGLE_PROMPT") {
           isPromptHidden = !!e.data.hidden;
           applyPromptVisibility();
         }
+        if (e.data && e.data.type === "AGY_QUICK_SEND") {
+          handleQuickSend(e.data.char);
+        }
       });
 
       // 4. Continuously ensure the prompt card is lifted 54px above Android navigation bar
       function liftPromptCard() {
-        if (isPromptHidden || document.body.classList.contains("agy-reading-mode")) return;
-        const box = document.querySelector('[role="combobox"], textarea');
+        if (!isTouch || isPromptHidden || document.body.classList.contains("agy-reading-mode")) return;
+        const box = document.querySelector('[role="combobox"], textarea, input[type="text"]');
         if (!box) return;
         
         // Find outer prompt card container
@@ -1135,8 +1325,10 @@
         }
       }
 
-      setInterval(liftPromptCard, 1000);
-      liftPromptCard();
+      if (isTouch) {
+        setInterval(liftPromptCard, 1000);
+        liftPromptCard();
+      }
     }
 
     initMobileKeyboardHandler();
