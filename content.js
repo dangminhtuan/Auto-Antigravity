@@ -1,9 +1,10 @@
 /**
- * content.js — AGY Auto-Approve v18
+ * content.js — AGY Auto-Approve v20
  *
- * Updates in v18:
- * 1. Fixed duplicate character insertion ('oo' / 'oooo') by removing redundant manual beforeinput before execCommand('insertText') and adding Cross-Isolated-World teardown + DOM debounce lock.
- * 2. Centered bottom dock (left: 50%, translateX(-50%)) and strict approval card matching.
+ * Updates in v20:
+ * 1. Added native-style Blue Arrow Send button (→) on the right of 'd' in the bottom dock to submit current prompt text/attachments with 1 tap.
+ * 2. Fixed getSendButton() false match on 'Send feedback' button and restored unconditional Enter + forceClick submit loop so 'u', 'o', 'd' auto-submit 100% reliably.
+ * 3. Isolated status bar channel to AGY_UPDATE_BAR_V20 to block zombie 'Dang click Submit...' notifications from un-refreshed tabs.
  */
 
 (() => {
@@ -163,7 +164,7 @@
     if (!isTop) {
       try {
         window.top.postMessage(
-          { type: "AGY_UPDATE_BAR", htmlContent, colorHint, autoHideMs: effectiveHideMs },
+          { type: "AGY_UPDATE_BAR_V20", htmlContent, colorHint, autoHideMs: effectiveHideMs },
           "*"
         );
       } catch (e) {}
@@ -223,7 +224,7 @@
   // Top frame listens for messages from the chat iframe
   if (isTop) {
     addSafeListener(window, "message", (e) => {
-      if (e.data && e.data.type === "AGY_UPDATE_BAR") {
+      if (e.data && e.data.type === "AGY_UPDATE_BAR_V20") {
         // Block zombie messages from older orphaned script instances in memory
         const content = String(e.data.htmlContent || "");
         if (content.includes("Dang cho dialog") || content.includes("Chua thay")) {
@@ -367,7 +368,7 @@
           document.querySelectorAll("iframe").forEach((ifr) => {
             try {
               ifr.contentWindow?.postMessage({
-                type: "AGY_QUICK_SEND_SINGLE",
+                type: "AGY_QUICK_SEND_V20",
                 char: char,
               }, "*");
             } catch (err) {}
@@ -376,6 +377,63 @@
 
         row.appendChild(btn);
       });
+
+      // 4. Native-style Blue Arrow Send Button (submits current prompt box content as-is)
+      const sendNowBtn = document.createElement("button");
+      sendNowBtn.id = "agy-quick-submit-btn";
+      sendNowBtn.title = "Gửi ngay nội dung đang có trong ô nhập (tương đương nút mũi tên xanh gốc)";
+      sendNowBtn.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;">
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+          <polyline points="12 5 19 12 12 19"></polyline>
+        </svg>
+      `;
+      sendNowBtn.style.cssText = `
+        width: 30px; height: 30px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        background: #1a73e8;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        cursor: pointer;
+        box-shadow: 0 2px 8px rgba(26, 115, 232, 0.5);
+        touch-action: manipulation;
+        transition: transform 0.12s ease, filter 0.12s ease;
+        padding: 0; margin-left: 1px;
+      `;
+
+      sendNowBtn.addEventListener("pointerdown", () => {
+        sendNowBtn.style.transform = "scale(0.88)";
+        sendNowBtn.style.filter = "brightness(1.15)";
+      });
+      sendNowBtn.addEventListener("pointerup", () => {
+        sendNowBtn.style.transform = "scale(1)";
+        sendNowBtn.style.filter = "none";
+      });
+      sendNowBtn.addEventListener("pointerleave", () => {
+        sendNowBtn.style.transform = "scale(1)";
+        sendNowBtn.style.filter = "none";
+      });
+
+      addSafeListener(sendNowBtn, "click", (e) => {
+        e.stopPropagation();
+        updateBar("Đang gửi lệnh...", "info", 1500);
+
+        if (isPromptHidden) {
+          isPromptHidden = false;
+          toggleBtn.innerHTML = "📖 Đọc tràn viền";
+          toggleBtn.style.color = "rgba(255, 255, 255, 0.88)";
+          toggleBtn.style.borderColor = "rgba(255, 255, 255, 0.18)";
+        }
+
+        document.querySelectorAll("iframe").forEach((ifr) => {
+          try {
+            ifr.contentWindow?.postMessage({
+              type: "AGY_DIRECT_SUBMIT_V20",
+            }, "*");
+          } catch (err) {}
+        });
+      });
+
+      row.appendChild(sendNowBtn);
 
       container.appendChild(row);
     }
@@ -1327,8 +1385,15 @@
             } catch (e) {}
           }
 
-          // 6. Notify standard React change listeners without inserting a second character
+          // 6. Notify React state listeners (InputEvent 'input' enables the Send button without duplicating text)
           try {
+            box.dispatchEvent(new InputEvent("input", {
+              bubbles: true,
+              cancelable: true,
+              composed: true,
+              inputType: "insertText",
+              data: char,
+            }));
             box.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
             box.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
           } catch (e) {}
@@ -1349,35 +1414,67 @@
           box.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
         }
 
-        // Helper to locate the Send Button in the prompt card
-        function getSendButton() {
-          const form = box.closest("form") ||
-                       box.closest('[class*="rounded-"], [class*="border-"]') ||
-                       box.parentElement?.parentElement;
+        triggerPromptSubmit(box);
+      }
 
-          if (form) {
-            let btn = form.querySelector('button[aria-label*="send" i], button[aria-label*="gửi" i], button[title*="send" i], button[title*="gửi" i], button[type="submit"]');
-            if (btn) return btn;
+      // Shared helper to locate the exact native Blue Arrow "Send message" button (never "Send feedback")
+      function findPromptSendButton(box) {
+        // 1. Direct exact aria-label match for Antigravity's Send message button
+        const direct = document.querySelector(
+          'button[aria-label="Send message" i], button[aria-label*="Send message" i], button[aria-label*="Gửi tin nhắn" i]'
+        );
+        if (direct) return direct;
 
-            // In bottom toolbar: filter out mic, model selector, context (+)
-            const allBtns = Array.from(form.querySelectorAll("button"));
-            const candidates = allBtns.filter((b) => {
-              const aria = (b.getAttribute("aria-label") || b.title || "").toLowerCase();
-              if (aria.includes("model") || aria.includes("context") || aria.includes("mic") || aria.includes("audio")) {
-                return false;
-              }
-              return !!b.querySelector("svg");
-            });
-            if (candidates.length > 0) {
-              return candidates[candidates.length - 1];
-            }
+        // 2. Walk up from box until we find the prompt card container that holds the toolbar buttons
+        let card = box ? box.parentElement : null;
+        let depth = 0;
+        while (card && card !== document.body && depth < 8) {
+          const btns = card.querySelectorAll("button");
+          if (btns.length >= 2) {
+            break;
           }
-
-          return document.querySelector('button[aria-label*="send" i], button[aria-label*="gửi" i]');
+          card = card.parentElement;
+          depth++;
         }
 
-        // Helper to dispatch Enter key events
+        if (card && card !== document.body) {
+          const byLabel = card.querySelector(
+            'button[aria-label*="send" i]:not([aria-label*="feedback" i]), button[aria-label*="gửi" i], button[type="submit"]'
+          );
+          if (byLabel) return byLabel;
+
+          // Filter toolbar buttons: exclude Add context (+), model selector, permissions, and mic
+          const allBtns = Array.from(card.querySelectorAll("button"));
+          const candidates = allBtns.filter((b) => {
+            const aria = (b.getAttribute("aria-label") || b.title || "").toLowerCase();
+            if (
+              aria.includes("feedback") ||
+              aria.includes("model") ||
+              aria.includes("context") ||
+              aria.includes("permission") ||
+              aria.includes("preset") ||
+              aria.includes("mic") ||
+              aria.includes("audio") ||
+              aria.includes("voice")
+            ) {
+              return false;
+            }
+            return !!b.querySelector("svg");
+          });
+          if (candidates.length > 0) {
+            return candidates[candidates.length - 1];
+          }
+        }
+
+        return document.querySelector(
+          'button[aria-label*="send" i]:not([aria-label*="feedback" i]), button[aria-label*="gửi" i]'
+        );
+      }
+
+      // Shared helper to dispatch Enter + click native Send button until prompt is submitted
+      function triggerPromptSubmit(box) {
         function dispatchEnter() {
+          if (!box) return;
           const keyOpts = {
             key: "Enter",
             code: "Enter",
@@ -1393,31 +1490,56 @@
           box.dispatchEvent(new KeyboardEvent("keyup", keyOpts));
         }
 
-        // Wait 120ms for React to process state and enable the Send button, then submit once
-        setTimeout(() => {
-          const sendBtn = getSendButton();
+        let attempts = 0;
+        function trySubmit() {
+          attempts++;
+          const sendBtn = findPromptSendButton(box);
+
+          // Always fire BOTH Enter key and forceClick on the real Send button
+          dispatchEnter();
+
           if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute("aria-disabled") !== "true") {
             forceClick(sendBtn);
-          } else {
-            dispatchEnter();
           }
 
-          // Second check at +180ms ONLY if the character is still sitting in the input box
-          setTimeout(() => {
-            const remainingText = (box.textContent || box.value || "").trim();
-            if (remainingText.length > 0) {
-              const btn2 = getSendButton();
-              if (btn2 && !btn2.disabled) {
-                forceClick(btn2);
-              } else {
-                dispatchEnter();
-              }
-            }
+          const textCleared = !box || !box.textContent || box.textContent.trim() === "";
+          const stopBtnExists = !!document.querySelector(
+            'button[aria-label*="stop" i], button[aria-label*="dừng" i], button:has(svg rect), button:has(rect)'
+          );
+
+          if (!textCleared && !stopBtnExists && attempts < 4) {
+            setTimeout(trySubmit, 110);
+          } else {
             setTimeout(() => {
-              try { box.blur(); } catch (e) {}
-            }, 200);
-          }, 180);
-        }, 120);
+              try { if (box) box.blur(); } catch (e) {}
+            }, 220);
+          }
+        }
+
+        setTimeout(trySubmit, 100);
+      }
+
+      // Direct Submit Handler for the dock's Blue Arrow (→) button: submits current input as-is
+      function handleDirectSubmit() {
+        if (!isCurrentInstance()) return;
+
+        if (isPromptHidden) {
+          isPromptHidden = false;
+          applyPromptVisibility();
+          try {
+            window.top.postMessage({ type: "AGY_PROMPT_STATE", hidden: false }, "*");
+          } catch (err) {}
+        }
+
+        const box = document.querySelector('[role="combobox"], [contenteditable="true"], textarea, input[type="text"]');
+        const sendBtn = findPromptSendButton(box);
+
+        if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute("aria-disabled") !== "true") {
+          forceClick(sendBtn);
+        }
+        if (box) {
+          triggerPromptSubmit(box);
+        }
       }
 
       // Listen for broadcasts from top frame
@@ -1426,8 +1548,11 @@
           isPromptHidden = !!e.data.hidden;
           applyPromptVisibility();
         }
-        if (e.data && e.data.type === "AGY_QUICK_SEND_SINGLE") {
+        if (e.data && e.data.type === "AGY_QUICK_SEND_V20") {
           handleQuickSend(e.data.char);
+        }
+        if (e.data && e.data.type === "AGY_DIRECT_SUBMIT_V20") {
+          handleDirectSubmit();
         }
       });
 
