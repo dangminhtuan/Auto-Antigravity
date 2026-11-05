@@ -367,7 +367,7 @@
           document.querySelectorAll("iframe").forEach((ifr) => {
             try {
               ifr.contentWindow?.postMessage({
-                type: "AGY_QUICK_SEND",
+                type: "AGY_QUICK_SEND_SINGLE",
                 char: char,
               }, "*");
             } catch (err) {}
@@ -1277,23 +1277,42 @@
                                   box.isContentEditable;
 
         if (isContentEditable) {
-          // 1. Select all existing content in the editable element so new char replaces it cleanly
+          // 1. Select all existing text inside the Lexical paragraph and delete it
           try {
-            const sel = window.getSelection();
-            const range = document.createRange();
-            range.selectNodeContents(box);
-            sel.removeAllRanges();
-            sel.addRange(range);
+            document.execCommand("selectAll", false, null);
             document.execCommand("delete", false, null);
           } catch (e) {}
 
-          // 2. Primary method: Native execCommand("insertText") — Chromium automatically dispatches
-          //    its own native beforeinput & input events for Lexical/ProseMirror!
-          try {
-            document.execCommand("insertText", false, char);
-          } catch (e) {}
+          // 2. If any leftover text (like old 'oo') remains, select its text node directly and replace
+          if ((box.textContent || "").trim().length > 0) {
+            try {
+              const sel = window.getSelection();
+              const range = document.createRange();
+              const targetNode = box.querySelector("p, span") || box;
+              range.selectNodeContents(targetNode);
+              sel.removeAllRanges();
+              sel.addRange(range);
+              document.execCommand("delete", false, null);
+            } catch (e) {}
+          }
 
-          // 3. Fallback ONLY if the editor is still empty (execCommand was blocked)
+          // 3. Insert exactly ONE character
+          if ((box.textContent || "").trim() !== char) {
+            try {
+              document.execCommand("insertText", false, char);
+            } catch (e) {}
+          }
+
+          // 4. Safety guard: If text somehow became 'oo' or 'ooo', trim it back to single char
+          const currentTxt = (box.textContent || "").trim();
+          if (currentTxt.length > 1) {
+            try {
+              document.execCommand("selectAll", false, null);
+              document.execCommand("insertText", false, char);
+            } catch (e) {}
+          }
+
+          // 5. Fallback ONLY if editor is still completely empty
           if ((box.textContent || "").trim() === "") {
             try {
               const dt = new DataTransfer();
@@ -1308,7 +1327,7 @@
             } catch (e) {}
           }
 
-          // 4. Notify standard React change listeners without inserting a second character
+          // 6. Notify standard React change listeners without inserting a second character
           try {
             box.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
             box.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
@@ -1407,7 +1426,7 @@
           isPromptHidden = !!e.data.hidden;
           applyPromptVisibility();
         }
-        if (e.data && e.data.type === "AGY_QUICK_SEND") {
+        if (e.data && e.data.type === "AGY_QUICK_SEND_SINGLE") {
           handleQuickSend(e.data.char);
         }
       });
