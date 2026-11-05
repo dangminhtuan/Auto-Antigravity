@@ -1,9 +1,9 @@
 /**
- * content.js — AGY Auto-Approve v15
+ * content.js — AGY Auto-Approve v16
  *
- * Updates in v15:
- * 1. Moved notification bar and reading mode toggle down to the bottom empty space (54px mobile gap).
- * 2. Added 3 circular quick-action buttons: u, o, d (lowercase) for instant 1-tap submission.
+ * Updates in v16:
+ * 1. Shifted bottom dock to the bottom-left (left: 12px, bottom: 12px) to prevent covering the Send and Mic buttons on the right.
+ * 2. Robust React/Lexical typing & submit: Selection Range + beforeinput + insertText + paste + Enter dispatch + retry loop until red stop button.
  */
 
 (() => {
@@ -91,9 +91,13 @@
       container = document.createElement("div");
       container.id = "agy-control-container";
       container.style.cssText = `
-        position: fixed; bottom: 8px; right: 12px;
+        position: fixed !important;
+        bottom: 12px !important;
+        left: 12px !important;
+        right: auto !important;
+        top: auto !important;
         z-index: 2147483647;
-        display: flex; flex-direction: column; align-items: flex-end;
+        display: flex; flex-direction: column; align-items: flex-start;
         gap: 6px;
         pointer-events: none;
       `;
@@ -1204,7 +1208,7 @@
         }
       }
 
-      // Quick Send Handler: injects char, triggers React state, clicks Send arrow button
+      // Quick Send Handler: injects char, triggers React/Lexical state, clicks Send arrow button
       function handleQuickSend(char) {
         if (isPromptHidden) {
           isPromptHidden = false;
@@ -1214,87 +1218,162 @@
           } catch (err) {}
         }
 
-        const box = document.querySelector('[role="combobox"], textarea, input[type="text"]');
+        const box = document.querySelector('[role="combobox"], [contenteditable="true"], textarea, input[type="text"]');
         if (!box) return;
 
         box.focus();
 
-        // 1. Insert character via React property setter
-        let inputSet = false;
-        try {
-          if (box instanceof HTMLTextAreaElement || box instanceof HTMLInputElement) {
+        const isContentEditable = box.getAttribute("contenteditable") === "true" ||
+                                  box.getAttribute("role") === "combobox" ||
+                                  box.isContentEditable;
+
+        if (isContentEditable) {
+          // 1. Select the content in the editable element
+          try {
+            const sel = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(box);
+            sel.removeAllRanges();
+            sel.addRange(range);
+          } catch (e) {}
+
+          // 2. Dispatch beforeinput (Lexical/ProseMirror listens to this to update state!)
+          try {
+            const beforeInput = new InputEvent("beforeinput", {
+              bubbles: true,
+              cancelable: true,
+              composed: true,
+              inputType: "insertText",
+              data: char,
+            });
+            box.dispatchEvent(beforeInput);
+          } catch (e) {}
+
+          // 3. Native execCommand insertText
+          let inserted = false;
+          try {
+            inserted = document.execCommand("insertText", false, char);
+          } catch (e) {}
+
+          // 4. Fallback: If execCommand didn't insert, simulate Clipboard Paste
+          if (!inserted || !(box.textContent || "").includes(char)) {
+            try {
+              const dt = new DataTransfer();
+              dt.setData("text/plain", char);
+              const pasteEvent = new ClipboardEvent("paste", {
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+                clipboardData: dt,
+              });
+              box.dispatchEvent(pasteEvent);
+            } catch (e) {}
+          }
+
+          // 5. Dispatch input events for React
+          try {
+            box.dispatchEvent(new InputEvent("input", {
+              bubbles: true,
+              cancelable: true,
+              composed: true,
+              inputType: "insertText",
+              data: char,
+            }));
+            box.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+            box.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+          } catch (e) {}
+        } else {
+          // Standard Textarea or Input
+          try {
             const proto = box instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
             const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
             if (setter) {
               setter.call(box, char);
-              inputSet = true;
+            } else {
+              box.value = char;
             }
+          } catch (e) {
+            box.value = char;
           }
-        } catch (e) {}
-
-        if (!inputSet) {
-          box.value = char;
+          box.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+          box.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
         }
 
-        if (box.getAttribute("contenteditable") === "true" || box.getAttribute("role") === "combobox") {
-          try {
-            document.execCommand("selectAll", false, null);
-            document.execCommand("insertText", false, char);
-          } catch (e) {}
-          if (box.textContent !== char) {
-            box.textContent = char;
-          }
-        }
-
-        // 2. Dispatch events for React
-        box.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-        box.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-        box.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, data: char, inputType: "insertText" }));
-        box.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: char }));
-        box.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, cancelable: true, key: char }));
-
-        // 3. Find and click Send button (blue circular button with arrow or submit)
-        setTimeout(() => {
+        // Helper to locate the Send Button in the prompt card
+        function getSendButton() {
           const form = box.closest("form") ||
                        box.closest('[class*="rounded-"], [class*="border-"]') ||
                        box.parentElement?.parentElement;
 
-          let sendBtn = null;
           if (form) {
-            sendBtn = form.querySelector('button[aria-label*="send" i], button[title*="send" i], button[type="submit"]');
-            if (!sendBtn) {
-              const btns = Array.from(form.querySelectorAll("button"));
-              for (const b of btns) {
-                const aria = (b.getAttribute("aria-label") || b.title || "").toLowerCase();
-                if (aria.includes("model") || aria.includes("context") || aria.includes("mic") || aria.includes("audio")) {
-                  continue;
-                }
-                if (b.querySelector("svg") && !b.disabled) {
-                  sendBtn = b;
-                  break;
-                }
+            let btn = form.querySelector('button[aria-label*="send" i], button[aria-label*="gửi" i], button[title*="send" i], button[title*="gửi" i], button[type="submit"]');
+            if (btn) return btn;
+
+            // In bottom toolbar: filter out mic, model selector, context (+)
+            const allBtns = Array.from(form.querySelectorAll("button"));
+            const candidates = allBtns.filter((b) => {
+              const aria = (b.getAttribute("aria-label") || b.title || "").toLowerCase();
+              if (aria.includes("model") || aria.includes("context") || aria.includes("mic") || aria.includes("audio")) {
+                return false;
               }
+              return !!b.querySelector("svg");
+            });
+            if (candidates.length > 0) {
+              return candidates[candidates.length - 1];
             }
           }
 
-          if (!sendBtn) {
-            sendBtn = document.querySelector('button[aria-label*="send" i], button[title*="send" i], button[aria-label*="gửi" i]');
-          }
+          return document.querySelector('button[aria-label*="send" i], button[aria-label*="gửi" i]');
+        }
 
+        // Helper to dispatch Enter key events
+        function dispatchEnter() {
+          const keyOpts = {
+            key: "Enter",
+            code: "Enter",
+            keyCode: 13,
+            which: 13,
+            charCode: 13,
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+          };
+          box.dispatchEvent(new KeyboardEvent("keydown", keyOpts));
+          box.dispatchEvent(new KeyboardEvent("keypress", keyOpts));
+          box.dispatchEvent(new KeyboardEvent("keyup", keyOpts));
+        }
+
+        // Wait for React to process state and enable the Send button, then submit
+        let attempts = 0;
+        function trySubmit() {
+          attempts++;
+          const sendBtn = getSendButton();
+
+          // Dispatch Enter key to submit
+          dispatchEnter();
+
+          // Click the Send button if present
           if (sendBtn) {
-            sendBtn.disabled = false;
-            forceClick(sendBtn);
-          } else {
-            const enterDown = new KeyboardEvent("keydown", {
-              key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true
-            });
-            box.dispatchEvent(enterDown);
+            if (!sendBtn.disabled && sendBtn.getAttribute("aria-disabled") !== "true") {
+              forceClick(sendBtn);
+            }
           }
 
-          setTimeout(() => {
-            try { box.blur(); } catch (e) {}
-          }, 150);
-        }, 120);
+          // Check if submission completed (input cleared or stop button appeared)
+          const textCleared = !box.textContent || box.textContent.trim() === "";
+          const stopBtnExists = !!document.querySelector('button[aria-label*="stop" i], button[aria-label*="dừng" i], button:has(svg rect), button:has(rect)');
+
+          if (!textCleared && !stopBtnExists && attempts < 5) {
+            setTimeout(trySubmit, 100);
+          } else {
+            // Only blur after submission has registered to avoid closing keyboard too early
+            setTimeout(() => {
+              try { box.blur(); } catch (e) {}
+            }, 300);
+          }
+        }
+
+        setTimeout(trySubmit, 120);
       }
 
       // Listen for broadcasts from top frame
