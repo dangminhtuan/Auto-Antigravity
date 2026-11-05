@@ -1,9 +1,9 @@
 /**
- * content.js — AGY Auto-Approve v16
+ * content.js — AGY Auto-Approve v17
  *
- * Updates in v16:
- * 1. Shifted bottom dock to the bottom-left (left: 12px, bottom: 12px) to prevent covering the Send and Mic buttons on the right.
- * 2. Robust React/Lexical typing & submit: Selection Range + beforeinput + insertText + paste + Enter dispatch + retry loop until red stop button.
+ * Updates in v17:
+ * 1. Centered bottom dock (left: 50%, translateX(-50%)) to avoid BOTH the '+' attachment button on the far left and the Mic/Send buttons on the far right.
+ * 2. Eliminated false-positive approval triggers on chat history text by requiring Option 4 and a real <button> Submit to share the same compact approval card, plus a WeakSet of processed DOM nodes and guaranteed auto-hide timers.
  */
 
 (() => {
@@ -92,12 +92,13 @@
       container.id = "agy-control-container";
       container.style.cssText = `
         position: fixed !important;
-        bottom: 12px !important;
-        left: 12px !important;
+        bottom: 10px !important;
+        left: 50% !important;
         right: auto !important;
         top: auto !important;
+        transform: translateX(-50%);
         z-index: 2147483647;
-        display: flex; flex-direction: column; align-items: flex-start;
+        display: flex; flex-direction: column; align-items: center;
         gap: 6px;
         pointer-events: none;
       `;
@@ -122,7 +123,7 @@
     if (container) {
       container.style.opacity = "0";
       container.style.pointerEvents = "none";
-      container.style.transform = "translateY(12px)";
+      container.style.transform = "translate(-50%, 12px)";
       container.style.transition = "opacity 0.25s ease, transform 0.25s ease";
     }
   }
@@ -132,17 +133,20 @@
     if (container) {
       container.style.opacity = "1";
       container.style.pointerEvents = "none"; // container itself is pointer-events none
-      container.style.transform = "translateY(0)";
+      container.style.transform = "translate(-50%, 0)";
       container.style.transition = "opacity 0.25s ease, transform 0.25s ease";
     }
   }
 
   function updateBar(htmlContent, colorHint = "info", autoHideMs = 0) {
+    // Always enforce a safety auto-hide timeout (default 3500ms) so the bar NEVER gets stuck on screen
+    const effectiveHideMs = autoHideMs > 0 ? autoHideMs : 3500;
+
     // If we are in an iframe, relay the status to the top frame
     if (!isTop) {
       try {
         window.top.postMessage(
-          { type: "AGY_UPDATE_BAR", htmlContent, colorHint, autoHideMs },
+          { type: "AGY_UPDATE_BAR", htmlContent, colorHint, autoHideMs: effectiveHideMs },
           "*"
         );
       } catch (e) {}
@@ -194,11 +198,9 @@
       bar.style.transform = "translateY(0)";
     });
 
-    if (autoHideMs > 0) {
-      hideBarTimer = setTimeout(() => {
-        hideBar();
-      }, autoHideMs);
-    }
+    hideBarTimer = setTimeout(() => {
+      hideBar();
+    }, effectiveHideMs);
   }
 
   // Top frame listens for messages from the chat iframe
@@ -411,72 +413,84 @@
     );
   }
 
-  // ─── Robust Submit Button Finder ─────────────────────────────────────────────
-  function findSubmitButton() {
-    const candidates = queryDeep("button, [role='button'], input[type='submit'], div, a, span");
-    for (const el of candidates) {
-      const t = (el.innerText || el.textContent || "").trim().toLowerCase();
-      // Matches "submit", "submit ↵", etc.
-      if (
-        (t === "submit" || t.startsWith("submit ") || t.startsWith("submit\n") || t === "submit ↵") &&
-        t.length < 25
-      ) {
-        const clickable = el.closest('button, [role="button"], a, div[tabindex]') || el;
-        const rect = clickable.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) return clickable;
-      }
-    }
+  // ─── Track already-processed DOM nodes to prevent infinite re-triggering ─────
+  const processedNodes = new WeakSet();
 
-    // Fallback: any button containing "submit"
-    for (const el of candidates) {
-      const t = (el.innerText || el.textContent || "").trim().toLowerCase();
-      if (t.includes("submit") && t.length < 20) {
-        const clickable = el.closest('button, [role="button"], a') || el;
-        const rect = clickable.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) return clickable;
-      }
-    }
+  // ─── Strict Approval Card & Button Finder (Zero False Positives on Chat Text) ──
+  function findApprovalDialog() {
+    // 1. Only consider REAL interactive buttons (never spans/divs/code in chat prose)
+    const buttons = queryDeep("button, [role='button'], input[type='submit']");
 
-    return null;
-  }
+    for (const btn of buttons) {
+      if (processedNodes.has(btn)) continue;
+      if (btn.disabled || btn.getAttribute("aria-disabled") === "true") continue;
+      if (btn.closest("#agy-control-container, #agy-autoapprove-overlay, pre, code")) continue;
+      if (!isElementVisible(btn)) continue;
 
-  // ─── Robust Option 4 Finder ──────────────────────────────────────────────────
-  function findOptionFour() {
-    const all = queryDeep("div, li, button, [role='button'], [role='radio'], [role='option'], label");
+      const t = (btn.innerText || btn.textContent || "").trim().toLowerCase();
+      // Must strictly match "submit" or "submit ↵"
+      const isSubmit =
+        (t === "submit" || t === "submit ↵" || /^submit(\s+↵)?$/i.test(t)) &&
+        t.length <= 15;
 
-    // Strategy 1: Semantic match — "Yes, and always allow" WITHOUT conversation/project
-    for (const el of all) {
-      const text = (el.innerText || el.textContent || "").trim();
-      if (
-        text.includes("Yes, and always allow") &&
-        !text.includes("this conversation") &&
-        !text.includes("this project") &&
-        !text.includes("Yes, allow this time") // must NOT contain other options
-      ) {
-        // Walk UP to find the specific option row container
-        let row = el;
-        while (row && row.parentElement && row.parentElement !== document.body) {
-          const parentText = (row.parentElement.innerText || "").trim();
-          if (parentText.includes("Yes, allow this time") || parentText.includes("this conversation")) {
-            return row;
-          }
-          row = row.parentElement;
+      if (!isSubmit) continue;
+
+      // 2. Walk up from the Submit button (max 6 levels) to find its compact Approval Card
+      let card = btn.parentElement;
+      let depth = 0;
+      let validCard = null;
+
+      while (card && card !== document.body && depth < 7) {
+        const rect = card.getBoundingClientRect();
+        const cardText = (card.innerText || "").trim();
+
+        // A genuine approval card is compact (< 650px tall) and contains multiple allow options
+        if (
+          rect.height > 60 &&
+          rect.height < 650 &&
+          cardText.includes("Yes, and always allow") &&
+          (cardText.includes("Yes, allow this time") || cardText.includes("this conversation"))
+        ) {
+          validCard = card;
+          break;
         }
-        return el;
+        card = card.parentElement;
+        depth++;
       }
-    }
 
-    // Strategy 2: By badge '4'
-    for (const el of all) {
-      if (el.children.length === 0 && el.textContent.trim() === "4") {
-        let row = el;
-        while (row && row.parentElement && row.parentElement !== document.body) {
-          const t = (row.innerText || "").trim();
-          if (t.includes("Yes") && t.includes("allow")) {
-            return row;
+      if (!validCard || processedNodes.has(validCard)) continue;
+
+      // 3. Locate Option 4 strictly INSIDE this specific validCard
+      const candidates = validCard.querySelectorAll(
+        "div, li, button, [role='button'], [role='radio'], [role='option'], label"
+      );
+
+      let opt4 = null;
+      for (const el of candidates) {
+        if (el === btn || el.contains(btn)) continue;
+        const text = (el.innerText || el.textContent || "").trim();
+        if (
+          text.includes("Yes, and always allow") &&
+          !text.includes("this conversation") &&
+          !text.includes("this project") &&
+          !text.includes("Yes, allow this time")
+        ) {
+          let row = el;
+          while (row && row.parentElement && row.parentElement !== validCard) {
+            const parentText = (row.parentElement.innerText || "").trim();
+            if (parentText.includes("Yes, allow this time") || parentText.includes("this conversation")) {
+              opt4 = row;
+              break;
+            }
+            row = row.parentElement;
           }
-          row = row.parentElement;
+          if (!opt4) opt4 = el;
+          break;
         }
+      }
+
+      if (opt4 && isElementVisible(opt4)) {
+        return { card: validCard, opt4, submitBtn: btn };
       }
     }
 
@@ -630,11 +644,15 @@
   }
 
   // ─── Approval Execution ───────────────────────────────────────────────────────
-  async function executeApproval(optEl, submitBtn, fullText, settings, dialogKey) {
-    updateBar("Dang click Option 4...", "warning");
+  async function executeApproval(card, optEl, submitBtn, fullText, settings, dialogKey) {
+    // Mark card and buttons as processed immediately so they can never re-trigger
+    if (card) processedNodes.add(card);
+    if (optEl) processedNodes.add(optEl);
+    if (submitBtn) processedNodes.add(submitBtn);
+
+    updateBar("Dang click Option 4...", "warning", 3000);
 
     // 1. Force click Option 4 row and its internal targets
-    optEl.scrollIntoView({ behavior: "smooth", block: "center" });
     forceClick(optEl);
 
     // Also click any clickable children inside the row (e.g. badge, text span, radio)
@@ -655,7 +673,7 @@
     await new Promise((r) => setTimeout(r, 400));
 
     // 2. Force click Submit
-    updateBar("Dang click Submit...", "warning");
+    updateBar("Dang click Submit...", "warning", 3000);
     forceClick(submitBtn);
 
     const form = submitBtn.closest("form");
@@ -663,17 +681,14 @@
       try { form.requestSubmit(submitBtn); } catch (e) { form.submit(); }
     }
 
-    // Wait 600ms and verify if submit actually closed the dialog
-    await new Promise((r) => setTimeout(r, 600));
-    const stillPresent = findOptionFour();
-    if (stillPresent) {
-      // Retry clicking submit directly if dialog still exists
-      const retryBtn = findSubmitButton();
-      if (retryBtn) forceClick(retryBtn);
-      await new Promise((r) => setTimeout(r, 400));
+    // Wait 500ms and verify if submit actually closed the dialog
+    await new Promise((r) => setTimeout(r, 500));
+    if (submitBtn && isElementVisible(submitBtn) && !submitBtn.disabled) {
+      forceClick(submitBtn);
+      await new Promise((r) => setTimeout(r, 300));
     }
 
-    updateBar("✓ Da phe duyet!", "success", 3000);
+    updateBar("✓ Da phe duyet!", "success", 2500);
 
     await logEvent({
       time: new Date().toISOString(),
@@ -691,26 +706,28 @@
   async function scanAndProcess() {
     if (isProcessing) return;
 
-    const opt4 = findOptionFour();
-    const submitBtn = findSubmitButton();
-
-    if (!opt4 || !submitBtn) {
+    const dialog = findApprovalDialog();
+    if (!dialog) {
       return;
     }
 
-    const container = opt4.closest("[class*='rounded'], [class*='card'], [class*='border']") || document.body;
-    const fullText = container.innerText || container.textContent || "";
+    const { card, opt4, submitBtn } = dialog;
+    const fullText = card.innerText || card.textContent || "";
 
     // Stable dialogKey based on question and command, ignoring dynamic spinners
-    const questionEl = container.querySelector('h1, h2, h3, h4, strong, [class*="title"]') || opt4.parentElement?.parentElement;
-    const codeEl = container.querySelector('code, pre, [class*="command"]');
+    const questionEl = card.querySelector('h1, h2, h3, h4, strong, [class*="title"]') || opt4.parentElement?.parentElement;
+    const codeEl = card.querySelector('code, pre, [class*="command"]');
     const dialogKey = ((questionEl?.innerText || "") + "::" + (codeEl?.innerText || "")).trim() || fullText.substring(0, 80);
 
-    if (dialogKey === lastProcessedKey) return;
+    if (dialogKey === lastProcessedKey) {
+      processedNodes.add(card);
+      processedNodes.add(submitBtn);
+      return;
+    }
 
     const settings = await getSettings();
     if (!settings.enabled) {
-      updateBar("Extension dang bi TAT trong popup", "warning");
+      updateBar("Extension dang bi TAT trong popup", "warning", 3000);
       return;
     }
 
@@ -725,7 +742,8 @@
 
     updateBar(
       `[${classification.toUpperCase()}] Phe duyet sau ${delay}s...`,
-      classification === "safe" ? "success" : "warning"
+      classification === "safe" ? "success" : "warning",
+      (delay + 2) * 1000
     );
 
     let remaining = delay;
@@ -735,8 +753,12 @@
       remaining,
       classification,
       fullText,
-      () => { lastProcessedKey = dialogKey; },
-      () => executeApproval(opt4, submitBtn, fullText, settings, dialogKey)
+      () => {
+        processedNodes.add(card);
+        processedNodes.add(submitBtn);
+        lastProcessedKey = dialogKey;
+      },
+      () => executeApproval(card, opt4, submitBtn, fullText, settings, dialogKey)
     );
 
     window.__AGY_COUNTDOWN = countdownTimer = setInterval(() => {
@@ -746,7 +768,7 @@
         clearInterval(countdownTimer);
         countdownTimer = null;
         removeCountdown();
-        executeApproval(opt4, submitBtn, fullText, settings, dialogKey);
+        executeApproval(card, opt4, submitBtn, fullText, settings, dialogKey);
       }
     }, 1000);
   }
