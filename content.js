@@ -1,10 +1,9 @@
 /**
- * content.js — AGY Auto-Approve v20
+ * content.js — AGY Auto-Approve v21
  *
- * Updates in v20:
- * 1. Added native-style Blue Arrow Send button (→) on the right of 'd' in the bottom dock to submit current prompt text/attachments with 1 tap.
- * 2. Fixed getSendButton() false match on 'Send feedback' button and restored unconditional Enter + forceClick submit loop so 'u', 'o', 'd' auto-submit 100% reliably.
- * 3. Isolated status bar channel to AGY_UPDATE_BAR_V20 to block zombie 'Dang click Submit...' notifications from un-refreshed tabs.
+ * Updates in v21:
+ * 1. Added 1-Tap Recent Conversation/Project Switcher button (⇄) on the bottom dock to toggle instantly between the 2 most recent conversations (Alt+Tab style).
+ * 2. Compacted Reading Mode toggle label ('📖 Ẩn ô' / '✏️ Hiện ô') so the 6-button dock stays ultra-compact (~220px) and never touches '+' on the left or '→' on the right.
  */
 
 (() => {
@@ -223,6 +222,11 @@
 
   // Top frame listens for messages from the chat iframe
   if (isTop) {
+    // Helper to normalize conversation titles for comparison (handles mobile '...' truncation)
+    function normalizeChatTitle(t) {
+      return (t || "").replace(/\.{2,}|…$/g, "").trim().toLowerCase().substring(0, 16);
+    }
+
     addSafeListener(window, "message", (e) => {
       if (e.data && e.data.type === "AGY_UPDATE_BAR_V20") {
         // Block zombie messages from older orphaned script instances in memory
@@ -243,14 +247,66 @@
         const toggleBtn = document.getElementById("agy-toggle-prompt-btn");
         if (toggleBtn) {
           const hidden = !!e.data.hidden;
-          toggleBtn.innerHTML = hidden ? "✏️ Soạn thảo" : "📖 Đọc tràn viền";
+          toggleBtn.innerHTML = hidden ? "✏️ Hiện ô" : "📖 Ẩn ô";
           toggleBtn.style.color = hidden ? "rgba(56, 189, 248, 0.95)" : "rgba(255, 255, 255, 0.88)";
           toggleBtn.style.borderColor = hidden ? "rgba(56, 189, 248, 0.45)" : "rgba(255, 255, 255, 0.18)";
         }
       }
+      // Track the 2 most recent conversations/projects automatically
+      if (e.data && e.data.type === "AGY_ACTIVE_CHAT_V21") {
+        const rawTitle = (e.data.title || "").trim();
+        if (!rawTitle || rawTitle.length < 2) return;
+        const currentUrlTop = window.location.href;
+        const normNew = normalizeChatTitle(rawTitle);
+
+        try {
+          chrome.storage.local.get({ agy_recent_chats: [] }, (res) => {
+            let list = Array.isArray(res.agy_recent_chats) ? res.agy_recent_chats : [];
+            const newEntry = {
+              title: rawTitle,
+              topUrl: currentUrlTop,
+              ts: Date.now()
+            };
+
+            if (list.length === 0) {
+              list = [newEntry];
+            } else {
+              const norm0 = normalizeChatTitle(list[0].title);
+              if (norm0 === normNew || norm0.startsWith(normNew) || normNew.startsWith(norm0)) {
+                // Same active chat: update title (keep longer version if available) and URL
+                if (rawTitle.length >= (list[0].title || "").length) {
+                  list[0].title = rawTitle;
+                }
+                list[0].topUrl = currentUrlTop;
+                list[0].ts = Date.now();
+              } else {
+                // Switched to a different conversation -> shift old [0] to [1]
+                list = [newEntry, list[0]];
+              }
+            }
+
+            chrome.storage.local.set({ agy_recent_chats: list.slice(0, 2) });
+
+            // Update tooltip of ⇄ button with previous conversation name
+            const swapBtn = document.getElementById("agy-swap-chat-btn");
+            if (swapBtn && list[1]) {
+              swapBtn.title = `Đảo nhanh sang: ${list[1].title}`;
+            }
+          });
+        } catch (err) {}
+      }
+      // Fallback navigation if sidebar item was not in recent list and URL differs
+      if (e.data && e.data.type === "AGY_FALLBACK_NAVIGATE_V21") {
+        const targetUrl = e.data.url;
+        if (targetUrl && targetUrl !== window.location.href) {
+          window.location.href = targetUrl;
+        } else {
+          updateBar("⚠️ Không tìm thấy hội thoại trong thanh bên!", "warning", 2500);
+        }
+      }
     });
 
-    // Glassmorphism bottom control dock (Toggle Reading Mode + Quick Buttons u, o, d)
+    // Glassmorphism bottom control dock (⇄ Swap + 📖 Ẩn ô + u, o, d + →)
     function initBottomControlDock() {
       if (document.getElementById("agy-dock-row")) return;
       const container = getControlContainer();
@@ -258,32 +314,99 @@
       const row = document.createElement("div");
       row.id = "agy-dock-row";
       row.style.cssText = `
-        display: flex; align-items: center; gap: 5px;
+        display: flex; align-items: center; gap: 4px;
         pointer-events: auto;
         background: rgba(15, 23, 42, 0.55);
         backdrop-filter: blur(16px) saturate(160%);
         -webkit-backdrop-filter: blur(16px) saturate(160%);
         border: 1px solid rgba(255, 255, 255, 0.2);
         border-radius: 22px;
-        padding: 3px 6px;
+        padding: 3px 5px;
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
         user-select: none;
       `;
 
-      // 1. Reading Mode Toggle Button
+      // 0. 1-Tap Recent Conversation Switcher Button (⇄)
+      const swapBtn = document.createElement("button");
+      swapBtn.id = "agy-swap-chat-btn";
+      swapBtn.textContent = "⇄";
+      swapBtn.title = "Đảo qua lại giữa 2 hội thoại/dự án gần nhất (Alt+Tab)";
+      swapBtn.style.cssText = `
+        width: 29px; height: 29px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-size: 14.5px; font-weight: 700;
+        color: #c084fc;
+        background: rgba(192, 132, 252, 0.18);
+        border: 1px solid rgba(192, 132, 252, 0.45);
+        cursor: pointer;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+        touch-action: manipulation;
+        transition: transform 0.12s ease, filter 0.12s ease;
+        padding: 0;
+      `;
+
+      swapBtn.addEventListener("pointerdown", () => {
+        swapBtn.style.transform = "scale(0.88)";
+        swapBtn.style.filter = "brightness(1.2)";
+      });
+      swapBtn.addEventListener("pointerup", () => {
+        swapBtn.style.transform = "scale(1)";
+        swapBtn.style.filter = "none";
+      });
+      swapBtn.addEventListener("pointerleave", () => {
+        swapBtn.style.transform = "scale(1)";
+        swapBtn.style.filter = "none";
+      });
+
+      addSafeListener(swapBtn, "click", (e) => {
+        e.stopPropagation();
+        try {
+          chrome.storage.local.get({ agy_recent_chats: [] }, (res) => {
+            const list = Array.isArray(res.agy_recent_chats) ? res.agy_recent_chats : [];
+            if (list.length < 2 || !list[1] || !list[1].title) {
+              updateBar("⇄ Hãy mở hội thoại thứ 2 một lần để ghi nhớ!", "warning", 2800);
+              return;
+            }
+            const target = list[1];
+            const current = list[0];
+            // Pre-swap in storage so rapid toggling works smoothly
+            chrome.storage.local.set({ agy_recent_chats: [target, current] });
+            swapBtn.title = `Đảo nhanh sang: ${current.title}`;
+
+            const shortName = target.title.length > 24 ? target.title.substring(0, 24) + "…" : target.title;
+            updateBar(`⇄ Chuyển: ${shortName}`, "info", 2200);
+
+            document.querySelectorAll("iframe").forEach((ifr) => {
+              try {
+                ifr.contentWindow?.postMessage({
+                  type: "AGY_SWITCH_CHAT_V21",
+                  target: target,
+                }, "*");
+              } catch (err) {}
+            });
+          });
+        } catch (err) {
+          updateBar("⚠️ Không đọc được bộ nhớ hội thoại!", "danger", 2000);
+        }
+      });
+
+      row.appendChild(swapBtn);
+
+      // 1. Reading Mode Toggle Button (Compact label: 📖 Ẩn ô / ✏️ Hiện ô)
       const toggleBtn = document.createElement("button");
       toggleBtn.id = "agy-toggle-prompt-btn";
-      toggleBtn.innerHTML = "📖 Đọc tràn viền";
+      toggleBtn.innerHTML = "📖 Ẩn ô";
       toggleBtn.title = "Ẩn hoặc hiện ô nhập để tối đa không gian đọc";
       toggleBtn.style.cssText = `
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        font-size: 11.5px; font-weight: 600;
-        padding: 5px 10px; border-radius: 16px;
+        font-size: 11px; font-weight: 600;
+        padding: 5px 8px; border-radius: 15px;
         background: rgba(255, 255, 255, 0.08);
         border: 1px solid rgba(255, 255, 255, 0.18);
         color: rgba(255, 255, 255, 0.88);
         cursor: pointer;
-        display: flex; align-items: center; gap: 4px;
+        display: flex; align-items: center; gap: 3px;
         touch-action: manipulation;
         transition: all 0.2s ease;
         white-space: nowrap;
@@ -293,7 +416,7 @@
       addSafeListener(toggleBtn, "click", (e) => {
         e.stopPropagation();
         isPromptHidden = !isPromptHidden;
-        toggleBtn.innerHTML = isPromptHidden ? "✏️ Soạn thảo" : "📖 Đọc tràn viền";
+        toggleBtn.innerHTML = isPromptHidden ? "✏️ Hiện ô" : "📖 Ẩn ô";
         toggleBtn.style.color = isPromptHidden ? "rgba(56, 189, 248, 0.95)" : "rgba(255, 255, 255, 0.88)";
         toggleBtn.style.borderColor = isPromptHidden ? "rgba(56, 189, 248, 0.45)" : "rgba(255, 255, 255, 0.18)";
 
@@ -312,7 +435,7 @@
 
       // 2. Subtle Divider
       const divider = document.createElement("div");
-      divider.style.cssText = "width: 1px; height: 16px; background: rgba(255, 255, 255, 0.2); margin: 0 1px;";
+      divider.style.cssText = "width: 1px; height: 15px; background: rgba(255, 255, 255, 0.2); margin: 0;";
       row.appendChild(divider);
 
       // 3. Quick Action Buttons: u, o, d (lowercase)
@@ -328,10 +451,10 @@
         btn.textContent = char;
         btn.title = label;
         btn.style.cssText = `
-          width: 30px; height: 30px; border-radius: 50%;
+          width: 29px; height: 29px; border-radius: 50%;
           display: flex; align-items: center; justify-content: center;
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
-          font-size: 14.5px; font-weight: 700;
+          font-size: 14px; font-weight: 700;
           color: ${color};
           background: ${bg};
           border: 1px solid ${border};
@@ -339,6 +462,7 @@
           box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
           touch-action: manipulation;
           transition: transform 0.12s ease, filter 0.12s ease;
+          padding: 0;
         `;
 
         btn.addEventListener("pointerdown", () => {
@@ -360,7 +484,7 @@
 
           if (isPromptHidden) {
             isPromptHidden = false;
-            toggleBtn.innerHTML = "📖 Đọc tràn viền";
+            toggleBtn.innerHTML = "📖 Ẩn ô";
             toggleBtn.style.color = "rgba(255, 255, 255, 0.88)";
             toggleBtn.style.borderColor = "rgba(255, 255, 255, 0.18)";
           }
@@ -383,13 +507,13 @@
       sendNowBtn.id = "agy-quick-submit-btn";
       sendNowBtn.title = "Gửi ngay nội dung đang có trong ô nhập (tương đương nút mũi tên xanh gốc)";
       sendNowBtn.innerHTML = `
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;">
           <line x1="5" y1="12" x2="19" y2="12"></line>
           <polyline points="12 5 19 12 12 19"></polyline>
         </svg>
       `;
       sendNowBtn.style.cssText = `
-        width: 30px; height: 30px; border-radius: 50%;
+        width: 29px; height: 29px; border-radius: 50%;
         display: flex; align-items: center; justify-content: center;
         background: #1a73e8;
         border: 1px solid rgba(255, 255, 255, 0.35);
@@ -397,7 +521,7 @@
         box-shadow: 0 2px 8px rgba(26, 115, 232, 0.5);
         touch-action: manipulation;
         transition: transform 0.12s ease, filter 0.12s ease;
-        padding: 0; margin-left: 1px;
+        padding: 0;
       `;
 
       sendNowBtn.addEventListener("pointerdown", () => {
@@ -419,7 +543,7 @@
 
         if (isPromptHidden) {
           isPromptHidden = false;
-          toggleBtn.innerHTML = "📖 Đọc tràn viền";
+          toggleBtn.innerHTML = "📖 Ẩn ô";
           toggleBtn.style.color = "rgba(255, 255, 255, 0.88)";
           toggleBtn.style.borderColor = "rgba(255, 255, 255, 0.18)";
         }
@@ -1542,6 +1666,186 @@
         }
       }
 
+      // ─── 1-Tap Recent Conversation Tracker & Switcher (v21) ───────────────
+      function normalizeTitleForMatch(t) {
+        return (t || "").replace(/\.{2,}|…$/g, "").trim().toLowerCase().substring(0, 15);
+      }
+
+      function getCurrentConversationTitle() {
+        // Only detect conversation title when a chat prompt box is present
+        const promptBox = document.querySelector('[role="combobox"], textarea');
+        if (!promptBox) return null;
+
+        const ignoreWords = new Set([
+          "antigravity", "/", "inbox", "start conversation", "projects",
+          "conversation history", "knowledge", "browser", "settings",
+          " Playground", "playground", "recents", "see all"
+        ]);
+
+        const candidates = [];
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, null);
+        let el;
+        while ((el = walker.nextNode())) {
+          if (el.children.length > 0) continue;
+          if (el.closest('button, [role="button"], [id^="agy-"], nav, aside')) continue;
+          const txt = (el.textContent || "").trim();
+          if (txt.length < 2 || txt.length > 90) continue;
+          if (ignoreWords.has(txt.toLowerCase())) continue;
+
+          const rect = el.getBoundingClientRect();
+          // Top header bar region (between x=32 and right action icons, y=4..72)
+          if (
+            rect.top >= 4 &&
+            rect.top <= 72 &&
+            rect.left >= 32 &&
+            rect.left < window.innerWidth - 85 &&
+            rect.width > 16 &&
+            rect.height >= 10 &&
+            rect.height <= 44
+          ) {
+            candidates.push({ text: txt, left: rect.left });
+          }
+        }
+
+        if (candidates.length === 0) return null;
+        // On desktop ("Project / Title"), the rightmost candidate in the header is the conversation title
+        candidates.sort((a, b) => b.left - a.left);
+        return candidates[0].text;
+      }
+
+      let lastReportedTitle = "";
+      function reportActiveConversation() {
+        if (!isCurrentInstance()) return;
+        const title = getCurrentConversationTitle();
+        if (title && title !== lastReportedTitle) {
+          lastReportedTitle = title;
+          try {
+            window.top.postMessage({
+              type: "AGY_ACTIVE_CHAT_V21",
+              title: title,
+            }, "*");
+          } catch (err) {}
+        }
+      }
+
+      setInterval(reportActiveConversation, 1500);
+      setTimeout(reportActiveConversation, 600);
+
+      function findSidebarConversationItem(targetTitle) {
+        const normTarget = normalizeTitleForMatch(targetTitle);
+        if (!normTarget || normTarget.length < 2) return null;
+
+        const allEls = document.querySelectorAll("a, button, [role='button'], [role='treeitem'], [role='listitem'], div, span");
+        let bestMatch = null;
+
+        for (const el of allEls) {
+          if (el.id && el.id.startsWith("agy-")) continue;
+          if (el.children.length > 2) continue;
+          const rawText = (el.textContent || "").trim();
+          if (rawText.length < 2 || rawText.length > 100) continue;
+
+          const rect = el.getBoundingClientRect();
+          // Must be visible in the left sidebar / conversation list area (below top header)
+          if (rect.top <= 68 || rect.left < 0 || rect.left > 320 || rect.width < 30 || rect.height < 14 || rect.height > 65) {
+            continue;
+          }
+
+          const normEl = normalizeTitleForMatch(rawText);
+          if (normEl === normTarget || normEl.startsWith(normTarget) || normTarget.startsWith(normEl)) {
+            const clickable = el.closest("a, button, [role='button'], [role='treeitem'], [role='listitem'], [tabindex]") || el;
+            bestMatch = clickable;
+            break;
+          }
+        }
+        return bestMatch;
+      }
+
+      function findSidebarToggleBtn() {
+        const byAria = document.querySelector(
+          'button[aria-label*="Sidebar" i], button[title*="Sidebar" i], button[aria-label*="menu" i], button[aria-label*="Back" i]'
+        );
+        if (byAria) return byAria;
+
+        // Fallback: top-left button in the header bar (arrow ← on mobile or sidebar icon)
+        const buttons = document.querySelectorAll("button, [role='button']");
+        for (const b of buttons) {
+          if (b.id && b.id.startsWith("agy-")) continue;
+          const r = b.getBoundingClientRect();
+          if (r.top >= 4 && r.top <= 70 && r.left >= 0 && r.left <= 68 && r.width >= 20 && r.height >= 20) {
+            return b;
+          }
+        }
+        return null;
+      }
+
+      function findConversationHistoryTab() {
+        const allEls = document.querySelectorAll("a, button, [role='button'], div, span");
+        for (const el of allEls) {
+          if (el.children.length > 2) continue;
+          const txt = (el.textContent || "").trim().toLowerCase();
+          if (txt === "conversation history") {
+            const r = el.getBoundingClientRect();
+            if (r.top > 60 && r.left >= 0 && r.left < 320 && r.width > 30 && r.height > 12) {
+              return el.closest("a, button, [role='button'], [tabindex]") || el;
+            }
+          }
+        }
+        return null;
+      }
+
+      function switchToConversation(target) {
+        if (!target || !target.title) return;
+
+        // 1. If sidebar is already open and item is visible, click immediately
+        const immediateItem = findSidebarConversationItem(target.title);
+        if (immediateItem) {
+          lastReportedTitle = ""; // Force re-sync after switch
+          forceClick(immediateItem);
+          return;
+        }
+
+        // 2. Otherwise open the Sidebar first
+        const toggleBtn = findSidebarToggleBtn();
+        if (toggleBtn) {
+          forceClick(toggleBtn);
+        }
+
+        // 3. Poll for the sidebar item (and open Conversation History if needed)
+        let attempts = 0;
+        const maxAttempts = 7;
+        const pollTimer = setInterval(() => {
+          attempts++;
+          const item = findSidebarConversationItem(target.title);
+          if (item) {
+            clearInterval(pollTimer);
+            lastReportedTitle = "";
+            forceClick(item);
+            return;
+          }
+
+          // On attempt 3, if not found under expanded workspace tree, click "Conversation History"
+          if (attempts === 3) {
+            const histTab = findConversationHistoryTab();
+            if (histTab) {
+              forceClick(histTab);
+            }
+          }
+
+          if (attempts >= maxAttempts) {
+            clearInterval(pollTimer);
+            // Fallback to top URL navigation if available
+            if (target.topUrl) {
+              try {
+                window.top.postMessage({
+                  type: "AGY_FALLBACK_NAVIGATE_V21",
+                  url: target.topUrl,
+                }, "*");
+              } catch (err) {}
+            }
+          }
+        }, 140);
+      }
+
       // Listen for broadcasts from top frame
       addSafeListener(window, "message", (e) => {
         if (e.data && e.data.type === "AGY_TOGGLE_PROMPT") {
@@ -1554,10 +1858,14 @@
         if (e.data && e.data.type === "AGY_DIRECT_SUBMIT_V20") {
           handleDirectSubmit();
         }
+        if (e.data && e.data.type === "AGY_SWITCH_CHAT_V21") {
+          switchToConversation(e.data.target);
+        }
       });
 
       // 4. Continuously ensure the prompt card is lifted 54px above Android navigation bar
       function liftPromptCard() {
+        if (!isCurrentInstance()) return;
         if (!isTouch || isPromptHidden || document.body.classList.contains("agy-reading-mode")) return;
         const box = document.querySelector('[role="combobox"], textarea, input[type="text"]');
         if (!box) return;
@@ -1585,7 +1893,7 @@
     scanAndProcess();
   }
 
-  console.log(`[AGY Auto-Approve] v19 active | frame: ${isTop ? "TOP" : "IFRAME"}`);
+  console.log(`[AGY Auto-Approve] v21 active | frame: ${isTop ? "TOP" : "IFRAME"}`);
 })();
 
 
