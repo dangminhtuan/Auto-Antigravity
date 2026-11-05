@@ -1,9 +1,9 @@
 /**
- * content.js — AGY Auto-Approve v17
+ * content.js — AGY Auto-Approve v18
  *
- * Updates in v17:
- * 1. Centered bottom dock (left: 50%, translateX(-50%)) to avoid BOTH the '+' attachment button on the far left and the Mic/Send buttons on the far right.
- * 2. Eliminated false-positive approval triggers on chat history text by requiring Option 4 and a real <button> Submit to share the same compact approval card, plus a WeakSet of processed DOM nodes and guaranteed auto-hide timers.
+ * Updates in v18:
+ * 1. Fixed duplicate character insertion ('oo' / 'oooo') by removing redundant manual beforeinput before execCommand('insertText') and adding Cross-Isolated-World teardown + DOM debounce lock.
+ * 2. Centered bottom dock (left: 50%, translateX(-50%)) and strict approval card matching.
  */
 
 (() => {
@@ -17,7 +17,13 @@
     return;
   }
 
-  // ─── Zero-F5 Live Reload Teardown ───────────────────────────────────────────
+  // ─── Cross-Isolated-World Zero-F5 Teardown ──────────────────────────────────
+  const INSTANCE_ID = `agy_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  try {
+    document.dispatchEvent(new CustomEvent("AGY_DESTROY_OLD_INSTANCES"));
+    document.documentElement.setAttribute("data-agy-instance", INSTANCE_ID);
+  } catch (e) {}
+
   if (window.__AGY_CLEANUP) {
     try { window.__AGY_CLEANUP(); } catch (e) {}
   }
@@ -26,6 +32,11 @@
   function addSafeListener(target, type, handler, options) {
     target.addEventListener(type, handler, options);
     _listeners.push({ target, type, handler, options });
+  }
+
+  function isCurrentInstance() {
+    const active = document.documentElement.getAttribute("data-agy-instance");
+    return !active || active === INSTANCE_ID;
   }
 
   window.__AGY_CLEANUP = () => {
@@ -48,6 +59,12 @@
       l.target.removeEventListener(l.type, l.handler, l.options);
     }
   };
+
+  addSafeListener(document, "AGY_DESTROY_OLD_INSTANCES", () => {
+    if (window.__AGY_CLEANUP) {
+      try { window.__AGY_CLEANUP(); } catch (e) {}
+    }
+  });
 
   const DEFAULT_SETTINGS = {
     enabled: true,
@@ -704,7 +721,7 @@
 
   // ─── Main Scanning Loop ───────────────────────────────────────────────────────
   async function scanAndProcess() {
-    if (isProcessing) return;
+    if (!isCurrentInstance() || isProcessing) return;
 
     const dialog = findApprovalDialog();
     if (!dialog) {
@@ -1230,8 +1247,18 @@
         }
       }
 
-      // Quick Send Handler: injects char, triggers React/Lexical state, clicks Send arrow button
+      // Quick Send Handler: injects exactly ONE char, triggers React/Lexical state, clicks Send arrow button
       function handleQuickSend(char) {
+        if (!isCurrentInstance()) return;
+
+        // Cross-instance DOM debounce lock (800ms) to block duplicate firing from older extension instances
+        const now = Date.now();
+        const lastRun = Number(document.documentElement.getAttribute("data-agy-last-send") || "0");
+        if (now - lastRun < 800) {
+          return;
+        }
+        document.documentElement.setAttribute("data-agy-last-send", String(now));
+
         if (isPromptHidden) {
           isPromptHidden = false;
           applyPromptVisibility();
@@ -1250,35 +1277,24 @@
                                   box.isContentEditable;
 
         if (isContentEditable) {
-          // 1. Select the content in the editable element
+          // 1. Select all existing content in the editable element so new char replaces it cleanly
           try {
             const sel = window.getSelection();
             const range = document.createRange();
             range.selectNodeContents(box);
             sel.removeAllRanges();
             sel.addRange(range);
+            document.execCommand("delete", false, null);
           } catch (e) {}
 
-          // 2. Dispatch beforeinput (Lexical/ProseMirror listens to this to update state!)
+          // 2. Primary method: Native execCommand("insertText") — Chromium automatically dispatches
+          //    its own native beforeinput & input events for Lexical/ProseMirror!
           try {
-            const beforeInput = new InputEvent("beforeinput", {
-              bubbles: true,
-              cancelable: true,
-              composed: true,
-              inputType: "insertText",
-              data: char,
-            });
-            box.dispatchEvent(beforeInput);
+            document.execCommand("insertText", false, char);
           } catch (e) {}
 
-          // 3. Native execCommand insertText
-          let inserted = false;
-          try {
-            inserted = document.execCommand("insertText", false, char);
-          } catch (e) {}
-
-          // 4. Fallback: If execCommand didn't insert, simulate Clipboard Paste
-          if (!inserted || !(box.textContent || "").includes(char)) {
+          // 3. Fallback ONLY if the editor is still empty (execCommand was blocked)
+          if ((box.textContent || "").trim() === "") {
             try {
               const dt = new DataTransfer();
               dt.setData("text/plain", char);
@@ -1292,15 +1308,8 @@
             } catch (e) {}
           }
 
-          // 5. Dispatch input events for React
+          // 4. Notify standard React change listeners without inserting a second character
           try {
-            box.dispatchEvent(new InputEvent("input", {
-              bubbles: true,
-              cancelable: true,
-              composed: true,
-              inputType: "insertText",
-              data: char,
-            }));
             box.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
             box.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
           } catch (e) {}
@@ -1365,37 +1374,31 @@
           box.dispatchEvent(new KeyboardEvent("keyup", keyOpts));
         }
 
-        // Wait for React to process state and enable the Send button, then submit
-        let attempts = 0;
-        function trySubmit() {
-          attempts++;
+        // Wait 120ms for React to process state and enable the Send button, then submit once
+        setTimeout(() => {
           const sendBtn = getSendButton();
-
-          // Dispatch Enter key to submit
-          dispatchEnter();
-
-          // Click the Send button if present
-          if (sendBtn) {
-            if (!sendBtn.disabled && sendBtn.getAttribute("aria-disabled") !== "true") {
-              forceClick(sendBtn);
-            }
+          if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute("aria-disabled") !== "true") {
+            forceClick(sendBtn);
+          } else {
+            dispatchEnter();
           }
 
-          // Check if submission completed (input cleared or stop button appeared)
-          const textCleared = !box.textContent || box.textContent.trim() === "";
-          const stopBtnExists = !!document.querySelector('button[aria-label*="stop" i], button[aria-label*="dừng" i], button:has(svg rect), button:has(rect)');
-
-          if (!textCleared && !stopBtnExists && attempts < 5) {
-            setTimeout(trySubmit, 100);
-          } else {
-            // Only blur after submission has registered to avoid closing keyboard too early
+          // Second check at +180ms ONLY if the character is still sitting in the input box
+          setTimeout(() => {
+            const remainingText = (box.textContent || box.value || "").trim();
+            if (remainingText.length > 0) {
+              const btn2 = getSendButton();
+              if (btn2 && !btn2.disabled) {
+                forceClick(btn2);
+              } else {
+                dispatchEnter();
+              }
+            }
             setTimeout(() => {
               try { box.blur(); } catch (e) {}
-            }, 300);
-          }
-        }
-
-        setTimeout(trySubmit, 120);
+            }, 200);
+          }, 180);
+        }, 120);
       }
 
       // Listen for broadcasts from top frame
