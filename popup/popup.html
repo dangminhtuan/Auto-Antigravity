@@ -76,9 +76,23 @@
       </label>
     </div>
 
+    <div class="setting-row" style="margin-top:6px;">
+      <label class="setting-label" title="Sau khi duyet xong het cac du an dang cho, tu dong quay lai hoi thoai dang xem ban dau">
+        ↩️ Quay ve chat goc khi xong
+      </label>
+      <label class="toggle-switch" style="transform:scale(0.85);margin-left:auto;">
+        <input type="checkbox" id="toggle-return-home" checked />
+        <span class="slider"></span>
+      </label>
+    </div>
+
     <div style="margin-top:8px;display:flex;gap:6px;">
       <button class="btn-save" id="btn-save" style="flex:1;">Luu cau hinh</button>
-      <button id="btn-copy-dom" style="background:#f59e0b;color:#1e293b;border:none;border-radius:6px;font-size:12px;font-weight:700;padding:6px 10px;cursor:pointer;" title="Soi va copy ma DOM Sidebar vao Clipboard de gui cho AI">📋 Soi DOM</button>
+      <button id="btn-status-view" style="background:#0284c7;color:#fff;border:none;border-radius:6px;font-size:11.5px;font-weight:700;padding:6px 8px;cursor:pointer;" title="Chuyen Sidebar sang che do Group By: Status de gom moi du an In Progress len dau">📊 In-Progress</button>
+      <button id="btn-copy-dom" style="background:#f59e0b;color:#1e293b;border:none;border-radius:6px;font-size:11.5px;font-weight:700;padding:6px 8px;cursor:pointer;" title="Soi va copy ma DOM Sidebar vao Clipboard">📋 DOM</button>
+    </div>
+    <div style="font-size:10.5px;color:#94a3b8;margin-top:5px;line-height:1.3;">
+      💡 Meo: Bam <b>📊 In-Progress</b> de dua toan bo du an dang chay/cho duyet len dau Sidebar (hoac de nguyen, extension tu cuon quet).
     </div>
     <div class="save-msg" id="save-msg" hidden>✓ Da luu!</div>
   </section>
@@ -97,7 +111,7 @@
 
   <!-- Footer -->
   <footer>
-    <span>v1.0.22 (Bridge)</span>
+    <span>v1.0.24 (Bridge)</span>
     <a href="https://antigravity.google" target="_blank">antigravity.google</a>
   </footer>
 

@@ -8,7 +8,7 @@
  */
 
 (() => {
-  const AGY_VERSION = "1.0.22";
+  const AGY_VERSION = "1.0.24";
   // ─── Guard: Only run in AGY or Webviews ─────────────────────────────────────
   const currentUrl = window.location.href.toLowerCase();
   const isTop = window.self === window.top;
@@ -48,6 +48,7 @@
     if (window.__AGY_PATROL_INTERVAL) clearInterval(window.__AGY_PATROL_INTERVAL);
     if (window.__AGY_TOP_LED_INTERVAL) clearInterval(window.__AGY_TOP_LED_INTERVAL);
     if (window.__AGY_TOP_BRIDGE_INTERVAL) clearInterval(window.__AGY_TOP_BRIDGE_INTERVAL);
+    if (window.__AGY_TOP_TICK_INTERVAL) clearInterval(window.__AGY_TOP_TICK_INTERVAL);
     if (window.__AGY_OBSERVER) window.__AGY_OBSERVER.disconnect();
     const idsToRemove = [
       "agy-control-container",
@@ -81,6 +82,7 @@
     delayDangerous: 1,
     targetOption: 0, // 0 = Auto (Max - 1)
     multiProjectPatrol: true,
+    autoReturnHome: true,
   };
 
   let countdownTimer   = null;
@@ -430,19 +432,31 @@
       }
     });
 
-    // Top-frame backup bridge heartbeat (keeps bridge reachable even before chat iframe opens)
+    // Continuous wakeup tick from top frame -> iframes (beats Chrome background iframe throttling)
+    window.__AGY_TOP_TICK_INTERVAL = setInterval(() => {
+      if (!isCurrentInstance()) return;
+      document.querySelectorAll("iframe").forEach((ifr) => {
+        try {
+          ifr.contentWindow?.postMessage({ type: "AGY_HEARTBEAT_TICK_V24", ts: Date.now() }, "*");
+        } catch (err) {}
+      });
+    }, 900);
+
+    // Top-frame bridge heartbeat + instant command relay to wake throttled iframes
     window.__AGY_TOP_BRIDGE_INTERVAL = setInterval(() => {
       if (!isCurrentInstance()) return;
       try {
+        const iframeAlive = Date.now() - lastIframeSeenAt < 15000 || document.querySelectorAll("iframe").length > 0;
         chrome.runtime.sendMessage(
           {
             type: "AGY_BRIDGE_HEARTBEAT",
             payload: {
               frame: "top",
+              supportsRelay: true,
               extensionVersion: AGY_VERSION,
               url: window.location.href,
               title: document.title,
-              iframeAlive: Date.now() - lastIframeSeenAt < 4500,
+              iframeAlive,
               timestamp: Date.now(),
             },
           },
@@ -453,11 +467,20 @@
               updateBridgeLedUi();
               if (Array.isArray(resp.commands)) {
                 for (const cmd of resp.commands) {
-                  if (cmd.cmd === "PING_PROOF") {
+                  const wantIframe = (cmd.targetFrame || "iframe") === "iframe";
+                  const iframes = Array.from(document.querySelectorAll("iframe"));
+                  if (wantIframe && iframes.length > 0) {
+                    // Relay immediately via postMessage (wakes iframe even if Chrome throttled timers)
+                    iframes.forEach((ifr) => {
+                      try {
+                        ifr.contentWindow?.postMessage({ type: "AGY_BRIDGE_EXEC_V23", cmd }, "*");
+                      } catch (err) {}
+                    });
+                  } else if (cmd.cmd === "PING_PROOF") {
                     showProofOfControlBanner({
-                      iframeOk: Date.now() - lastIframeSeenAt < 4500,
+                      iframeOk: Date.now() - lastIframeSeenAt < 6500,
                       bridgeOnline: true,
-                      message: cmd.args?.message || "Top Frame Backup Pong!",
+                      message: cmd.args?.message || "Top Frame Pong!",
                     });
                     chrome.runtime.sendMessage({
                       type: "AGY_BRIDGE_RESULT",
@@ -468,7 +491,7 @@
                         frame: "top",
                         url: window.location.href,
                         title: document.title,
-                        iframeAlive: Date.now() - lastIframeSeenAt < 4500,
+                        iframeAlive: Date.now() - lastIframeSeenAt < 6500,
                       },
                     });
                   }
@@ -478,7 +501,7 @@
           }
         );
       } catch (e) {}
-    }, 2500);
+    }, 1600);
 
     // Glassmorphism bottom control dock (LED + 🔍 Search + 📖 + u, o, d + → + 📋 + ▾)
     function initBottomControlDock() {
@@ -1194,9 +1217,41 @@
     }
   }
 
+  const tickWaiters = new Set();
+  let activeCountdownTick = null;
+
+  function flushTickWaiters() {
+    if (typeof activeCountdownTick === "function") {
+      try { activeCountdownTick(); } catch (e) {}
+    }
+    for (const fn of Array.from(tickWaiters)) {
+      try { fn(); } catch (e) {}
+    }
+  }
+
+  function smartDelay(ms) {
+    return new Promise((resolve) => {
+      const deadline = Date.now() + ms;
+      let done = false;
+      const finish = () => {
+        if (!done) {
+          done = true;
+          tickWaiters.delete(check);
+          resolve();
+        }
+      };
+      const check = () => {
+        if (Date.now() >= deadline) finish();
+      };
+      tickWaiters.add(check);
+      setTimeout(finish, ms);
+    });
+  }
+
   function cancelAutoApprove() {
     clearInterval(countdownTimer);
     countdownTimer = null;
+    activeCountdownTick = null;
     removeCountdown();
     isProcessing = false;
     updateBar("Nguoi dung da bam Huy — bo qua lan nay", "warning", 3000);
@@ -1227,8 +1282,8 @@
       setReactInputValue(internalRadio, true);
     }
 
-    // Wait 400ms for React state update
-    await new Promise((r) => setTimeout(r, 400));
+    // Wait 400ms for React state update (resilient to background tab throttling)
+    await smartDelay(400);
 
     // 2. Force click Submit
     updateBar("Dang click Submit...", "warning", 3000);
@@ -1240,10 +1295,10 @@
     }
 
     // Wait 500ms and verify if submit actually closed the dialog
-    await new Promise((r) => setTimeout(r, 500));
+    await smartDelay(500);
     if (submitBtn && isElementVisible(submitBtn) && !submitBtn.disabled) {
       forceClick(submitBtn);
-      await new Promise((r) => setTimeout(r, 300));
+      await smartDelay(300);
     }
 
     updateBar(`✓ Da phe duyet (Option ${optNumber})!`, "success", 2500);
@@ -1258,6 +1313,9 @@
 
     lastProcessedKey = dialogKey;
     isProcessing = false;
+    if (typeof window.__AGY_ON_APPROVAL_DONE === "function") {
+      try { window.__AGY_ON_APPROVAL_DONE(); } catch (e) {}
+    }
   }
 
   // ─── Main Scanning Loop ───────────────────────────────────────────────────────
@@ -1308,33 +1366,46 @@
         (delay + 2) * 1000
       );
 
-      let remaining = delay;
+      const endTime = Date.now() + delay * 1000;
+      let triggered = false;
+
+      const finishCountdown = () => {
+        if (triggered) return;
+        triggered = true;
+        clearInterval(countdownTimer);
+        countdownTimer = null;
+        activeCountdownTick = null;
+        removeCountdown();
+        executeApproval(card, optChosen, submitBtn, fullText, settings, dialogKey, optNumber);
+      };
 
       showCountdown(
         delay,
-        remaining,
+        delay,
         classification,
         fullText,
         () => {
+          triggered = true;
+          activeCountdownTick = null;
           processedNodes.add(card);
           processedNodes.add(submitBtn);
           lastProcessedKey = dialogKey;
         },
-        () => executeApproval(card, optChosen, submitBtn, fullText, settings, dialogKey, optNumber),
+        finishCountdown,
         optNumber,
         strategy
       );
 
-      window.__AGY_COUNTDOWN = countdownTimer = setInterval(() => {
-        remaining--;
-        updateCountdown(remaining, delay);
-        if (remaining <= 0) {
-          clearInterval(countdownTimer);
-          countdownTimer = null;
-          removeCountdown();
-          executeApproval(card, optChosen, submitBtn, fullText, settings, dialogKey, optNumber);
+      activeCountdownTick = () => {
+        if (triggered) return;
+        const left = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
+        updateCountdown(left, delay);
+        if (left <= 0) {
+          finishCountdown();
         }
-      }, 1000);
+      };
+
+      window.__AGY_COUNTDOWN = countdownTimer = setInterval(activeCountdownTick, 350);
     } finally {
       isScanning = false;
     }
@@ -2040,14 +2111,22 @@
       }
 
       function getCurrentConversationTitle() {
-        // Only detect conversation title when a chat prompt box is present
+        // 1. Exact check: selected conversation row inside real sidebar
+        const selectedRow = document.querySelector('[data-testid="conversation-row-sidebar"][data-selected="true"]');
+        if (selectedRow) {
+          const t = selectedRow.querySelector("a[aria-label]")?.getAttribute("aria-label") ||
+                    selectedRow.querySelector(".truncate")?.textContent?.trim();
+          if (t) return t;
+        }
+
+        // 2. Top header bar fallback when prompt box is present
         const promptBox = document.querySelector('[role="combobox"], textarea');
         if (!promptBox) return null;
 
         const ignoreWords = new Set([
           "antigravity", "/", "inbox", "start conversation", "projects",
           "conversation history", "knowledge", "browser", "settings",
-          " Playground", "playground", "recents", "see all"
+          "playground", "recents", "see all", "customizations", "new conversation"
         ]);
 
         const candidates = [];
@@ -2055,16 +2134,18 @@
         let el;
         while ((el = walker.nextNode())) {
           if (el.children.length > 0) continue;
-          if (el.closest('button, [role="button"], [id^="agy-"], nav, aside')) continue;
+          if (el.closest('button, [role="button"], [role="navigation"], [data-testid="conversation-list-sidebar"], [id^="agy-"], nav, aside')) continue;
           const txt = (el.textContent || "").trim();
           if (txt.length < 2 || txt.length > 90) continue;
-          if (ignoreWords.has(txt.toLowerCase())) continue;
+          const lower = txt.toLowerCase();
+          if (ignoreWords.has(lower)) continue;
+          // Exclude relative timestamps like "1mo ago", "6d", "4m", "Worked for 2h 30m"
+          if (/^(\d+\s*(s|m|h|d|w|mo|y)\b|worked for\b|\d+\s+ago\b)/i.test(lower) || /\bago$/i.test(lower)) continue;
 
           const rect = el.getBoundingClientRect();
-          // Top header bar region (between x=32 and right action icons, y=4..72)
           if (
             rect.top >= 4 &&
-            rect.top <= 72 &&
+            rect.top <= 64 &&
             rect.left >= 32 &&
             rect.left < window.innerWidth - 85 &&
             rect.width > 16 &&
@@ -2076,7 +2157,6 @@
         }
 
         if (candidates.length === 0) return null;
-        // On desktop ("Project / Title"), the rightmost candidate in the header is the conversation title
         candidates.sort((a, b) => b.left - a.left);
         return candidates[0].text;
       }
@@ -2266,18 +2346,84 @@
       }
 
       function collectSidebarItems({ detectBadges = true } = {}) {
+        const items = [];
+        const convRows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
+
+        if (convRows.length > 0) {
+          for (const row of convRows) {
+            if (!isElementVisible(row)) continue;
+            const link = row.querySelector("a[href]") || row;
+            const title = (
+              row.querySelector("a[aria-label]")?.getAttribute("aria-label") ||
+              row.querySelector(".truncate")?.textContent ||
+              row.innerText ||
+              ""
+            ).replace(/\s+/g, " ").trim();
+            if (!title) continue;
+
+            const cascadeId = row.getAttribute("data-cascade-id") || "";
+            const projectId = row.closest("[data-sidebar-section-id]")?.getAttribute("data-sidebar-section-id") || "";
+            const selected = row.getAttribute("data-selected") === "true";
+            const subtext = row.getAttribute("data-subtext") || "";
+
+            let hasAttentionBadge = false;
+            let hasStopBtn = false;
+            let hasArchiveBtn = false;
+            let statusIconHtml = "";
+            const badgeSignals = [];
+
+            if (detectBadges) {
+              const dot = row.querySelector('[data-testid="attention-dot"], .animate-unread-ping');
+              if (dot) {
+                hasAttentionBadge = true;
+                badgeSignals.push("attention-dot");
+                statusIconHtml = (dot.closest("div.flex")?.innerHTML || dot.parentElement?.outerHTML || "").slice(0, 1200);
+              }
+              const stopBtn = row.querySelector('button[aria-label*="Stop" i]');
+              if (stopBtn) {
+                hasStopBtn = true;
+                badgeSignals.push("stop-execution");
+              }
+              const archBtn = row.querySelector('button[data-testid="conversation-archive-button"], button[aria-label*="Archive" i]');
+              if (archBtn) {
+                hasArchiveBtn = true;
+              }
+              // Capture right-side status badge HTML even if not attention-dot (for diagnostics)
+              if (!statusIconHtml) {
+                const statusArea = row.querySelector('div.flex.items-center.gap-1\\.5');
+                if (statusArea) statusIconHtml = statusArea.innerHTML.slice(0, 900);
+              }
+            }
+
+            const rect = row.getBoundingClientRect();
+            items.push({
+              el: link,
+              rowEl: row,
+              cascadeId,
+              projectId,
+              title,
+              selected,
+              subtext,
+              hasAttentionBadge,
+              hasStopBtn,
+              hasArchiveBtn,
+              badgeSignals,
+              statusIconHtml,
+              rect: { top: Math.round(rect.top), left: Math.round(rect.left), w: Math.round(rect.width), h: Math.round(rect.height) },
+            });
+          }
+          return items;
+        }
+
+        // Fallback generic scan (e.g. if sidebar uses compact/mobile layout without conversation-row-sidebar)
         const ignoreLabels = new Set([
           "antigravity", "new conversation", "+ new conversation",
           "customizations", "projects", "settings", "see all",
           "no conversations yet", "files", "folder", "mentions", "actions", "browser", "drive"
         ]);
-        const items = [];
         const seenRects = new Set();
-
-        const sidebarScope = document.querySelector('aside, nav, [class*="sidebar" i]') || document;
-        const candidates = sidebarScope.querySelectorAll(
-          "a, button, [role='button'], [role='treeitem'], [role='listitem'], [tabindex='0']"
-        );
+        const sidebarScope = document.querySelector('[role="navigation"][aria-label="Sidebar"], aside, nav, [class*="sidebar" i]') || document;
+        const candidates = sidebarScope.querySelectorAll("a, button, [role='button'], [role='treeitem'], [role='listitem'], [tabindex='0']");
 
         for (const el of candidates) {
           if (el.id && el.id.startsWith("agy-")) continue;
@@ -2285,11 +2431,10 @@
           if (!isElementVisible(el)) continue;
 
           const rect = el.getBoundingClientRect();
-          // Sidebar column region on desktop / opened drawer on mobile
           if (rect.left < 0 || rect.left > 340 || rect.width < 45 || rect.height < 18 || rect.height > 66) continue;
           if (rect.top < 62 || rect.top > window.innerHeight - 68) continue;
 
-          const text = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+          const text = (el.getAttribute("aria-label") || el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
           if (!text || text.length < 2 || text.length > 140) continue;
           const lower = text.toLowerCase();
           if (ignoreLabels.has(lower) || lower.startsWith("see all (") || lower.startsWith("desktop-")) continue;
@@ -2298,52 +2443,20 @@
           if (seenRects.has(rectKey)) continue;
           seenRects.add(rectKey);
 
-          let hasAttentionBadge = false;
-          const badgeSignals = [];
-
-          if (detectBadges) {
-            if (/\b(waiting|approval|pending|allow|review|chờ duyệt)\b/i.test(text + " " + (el.getAttribute("aria-label") || ""))) {
-              hasAttentionBadge = true;
-              badgeSignals.push("text/aria");
-            }
-
-            const indicators = el.querySelectorAll("svg, circle, span, div");
-            for (const ind of indicators) {
-              const cls = (ind.getAttribute("class") || "").toLowerCase();
-              if (cls.includes("pulse") || cls.includes("spin") || cls.includes("ping")) {
-                hasAttentionBadge = true;
-                badgeSignals.push("anim:" + cls.slice(0, 30));
-              }
-              if (ind.children.length > 0 && ind.tagName !== "svg" && ind.tagName !== "SVG") continue;
-              const style = window.getComputedStyle(ind);
-              const fill = (ind.getAttribute("fill") || style.fill || "").toLowerCase();
-              const bg = (style.backgroundColor || "").toLowerCase();
-              const ir = ind.getBoundingClientRect();
-              const isSmallDot = ir.width >= 4 && ir.width <= 14 && ir.height >= 4 && ir.height <= 14;
-              if (isSmallDot) {
-                const colorStr = fill + " " + bg;
-                if (
-                  colorStr.includes("59, 130, 246") || // blue-500
-                  colorStr.includes("26, 115, 232") || // google blue
-                  colorStr.includes("245, 158, 11") || // amber-500
-                  colorStr.includes("249, 115, 22") || // orange-500
-                  colorStr.includes("16, 185, 129") || // emerald-500
-                  colorStr.includes("#1a73e8") ||
-                  colorStr.includes("#3b82f6") ||
-                  colorStr.includes("#f59e0b")
-                ) {
-                  hasAttentionBadge = true;
-                  badgeSignals.push("dot:" + (fill !== "none" ? fill : bg));
-                }
-              }
-            }
-          }
-
+          const hasAttentionBadge = !!el.querySelector('[data-testid="attention-dot"], .animate-unread-ping');
           items.push({
             el,
+            rowEl: el,
+            cascadeId: "",
+            projectId: "",
             title: text,
+            selected: false,
+            subtext: "",
             hasAttentionBadge,
-            badgeSignals,
+            hasStopBtn: false,
+            hasArchiveBtn: false,
+            badgeSignals: hasAttentionBadge ? ["attention-dot"] : [],
+            statusIconHtml: "",
             rect: { top: Math.round(rect.top), left: Math.round(rect.left), w: Math.round(rect.width), h: Math.round(rect.height) },
           });
         }
@@ -2352,10 +2465,9 @@
 
       function buildDomSnapshotReport() {
         const activeChat = getCurrentConversationTitle();
-        const items = collectSidebarItems();
+        const items = collectSidebarItems({ detectBadges: true });
         const sidebarRoot =
-          document.querySelector('aside, nav, [class*="sidebar" i]') ||
-          items[0]?.el?.closest("div[class*='flex-col'], div[class*='overflow']") ||
+          document.querySelector('[role="navigation"][aria-label="Sidebar"], aside, nav, [class*="sidebar" i]') ||
           document.body;
 
         const cleanHtml = sidebarRoot
@@ -2372,8 +2484,12 @@
           hasApprovalDialog: !!dialogInfo,
           approvalPicked: dialogInfo ? { optNumber: dialogInfo.optNumber, strategy: dialogInfo.strategy } : null,
           sidebarItems: items.map((it) => ({
+            cascadeId: it.cascadeId,
             title: it.title,
+            selected: it.selected,
             hasAttentionBadge: it.hasAttentionBadge,
+            hasStopBtn: it.hasStopBtn,
+            hasArchiveBtn: it.hasArchiveBtn,
             badgeSignals: it.badgeSignals,
             rect: it.rect,
           })),
@@ -2386,6 +2502,95 @@
           cleanHtml;
 
         return { summary, items, reportText };
+      }
+
+      async function sweepSidebarConversations() {
+        const sc = document.querySelector('[data-testid="conversation-list-sidebar"]');
+        const byId = new Map();
+        const projectsMap = new Map();
+
+        function snapshotVisible() {
+          document.querySelectorAll('button[data-testid="project-header"]').forEach((p) => {
+            const label = p.getAttribute("data-project-label") || p.innerText?.trim() || "";
+            const dropId = p.closest("[data-sidebar-section-drop-id]")?.getAttribute("data-sidebar-section-drop-id") || label;
+            if (dropId) {
+              projectsMap.set(dropId, {
+                dropId,
+                label,
+                expanded: p.getAttribute("aria-expanded") === "true",
+              });
+            }
+          });
+          for (const item of collectSidebarItems({ detectBadges: true })) {
+            const key = item.cascadeId || item.title;
+            byId.set(key, {
+              cascadeId: item.cascadeId,
+              projectId: item.projectId,
+              title: item.title,
+              selected: item.selected,
+              hasAttentionBadge: item.hasAttentionBadge,
+              hasStopBtn: item.hasStopBtn,
+              hasArchiveBtn: item.hasArchiveBtn,
+              badgeSignals: item.badgeSignals,
+              subtext: item.subtext,
+              statusIconHtml: item.statusIconHtml,
+            });
+          }
+        }
+
+        snapshotVisible();
+        if (sc && sc.scrollHeight > sc.clientHeight + 20) {
+          const origTop = sc.scrollTop;
+          const step = Math.max(460, Math.floor(sc.clientHeight * 0.88));
+          for (let y = 0, steps = 0; y <= sc.scrollHeight + step && steps < 25; y += step, steps++) {
+            sc.scrollTop = y;
+            sc.dispatchEvent(new Event("scroll", { bubbles: true }));
+            await smartDelay(65);
+            snapshotVisible();
+          }
+          sc.scrollTop = origTop;
+          sc.dispatchEvent(new Event("scroll", { bubbles: true }));
+          await smartDelay(45);
+        }
+
+        return {
+          totalProjects: projectsMap.size,
+          totalConversations: byId.size,
+          projects: Array.from(projectsMap.values()),
+          conversations: Array.from(byId.values()),
+        };
+      }
+
+      function buildInspectUiReport() {
+        const activeChat = getCurrentConversationTitle();
+        const dialogInfo = findApprovalDialog();
+        const popovers = Array.from(
+          document.querySelectorAll('[role="dialog"], [role="menu"], [role="listbox"], [data-radix-popper-content-wrapper], [data-base-ui-portal]')
+        )
+          .filter((el) => isElementVisible(el) && !el.closest("#agy-control-container, #agy-autoapprove-overlay"))
+          .map((el) => ({
+            role: el.getAttribute("role") || "",
+            text: (el.innerText || "").slice(0, 1000),
+            html: el.outerHTML.slice(0, 6000),
+          }));
+
+        const sampleRows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'))
+          .slice(0, 5)
+          .map((r) => r.outerHTML.slice(0, 3500));
+
+        const reportObj = {
+          capturedAt: new Date().toISOString(),
+          url: window.location.href,
+          activeChat,
+          hasApprovalDialog: !!dialogInfo,
+          approvalPicked: dialogInfo
+            ? { optNumber: dialogInfo.optNumber, strategy: dialogInfo.strategy, cardHtml: dialogInfo.card.outerHTML.slice(0, 4000) }
+            : null,
+          visiblePopoversCount: popovers.length,
+          visiblePopovers: popovers,
+          sampleRowsHtml: sampleRows,
+        };
+        return "=== AGY INSPECT UI REPORT ===\n" + JSON.stringify(reportObj, null, 2);
       }
 
       function sendBridgeResult(cmdId, cmdName, ok, extra = {}) {
@@ -2427,7 +2632,7 @@
 
       function sendProofSnapshot(bridgeCmdId = null, customMessage = "", bridgeOnline = true) {
         const activeChat = getCurrentConversationTitle();
-        const items = collectSidebarItems();
+        const items = collectSidebarItems({ detectBadges: true });
         const hasPromptBox = !!document.querySelector('[role="combobox"], textarea');
         const hasApproval = !!findApprovalDialog();
 
@@ -2450,22 +2655,158 @@
           sidebarCount: items.length,
           hasPromptBox,
           hasApprovalDialog: hasApproval,
-          sampleItems: items.slice(0, 12).map((i) => i.title),
+          sampleItems: items.slice(0, 12).map((i) => ({
+            title: i.title,
+            attention: i.hasAttentionBadge,
+            stop: i.hasStopBtn,
+          })),
           message: customMessage,
         });
       }
 
-      // ─── Multi-Project Patrol Loop (switches when another project needs approval) ─
+      // ─── Smart Multi-Project Patrol & Batch Auto-Approval State Machine (v24) ──
       const patrolCooldowns = new Map();
+      let patrolHomeCascadeId = null;
+      let patrolVisit = null;
+      let patrolBusy = false;
+      let lastSweepAt = 0;
+      let sweepOffset = 0;
+      let sweepOrigTop = null;
+      let lastUserInteractTime = 0;
+      let lastSidebarHoverTime = 0;
+      let lastPatrolCheckAt = 0;
+
+      addSafeListener(
+        document,
+        "pointerdown",
+        (e) => {
+          if (!e.isTrusted) return;
+          lastUserInteractTime = Date.now();
+          if (e.target && e.target.closest?.('[data-testid="conversation-list-sidebar"]')) {
+            lastSidebarHoverTime = Date.now();
+          }
+          // User explicitly clicked a chat -> respect user's manual navigation
+          patrolHomeCascadeId = null;
+          patrolVisit = null;
+        },
+        true
+      );
+      addSafeListener(
+        document,
+        "wheel",
+        (e) => {
+          if (e.isTrusted && e.target && e.target.closest?.('[data-testid="conversation-list-sidebar"]')) {
+            lastSidebarHoverTime = Date.now();
+          }
+        },
+        true
+      );
+
+      window.__AGY_ON_APPROVAL_DONE = () => {
+        if (patrolVisit) {
+          patrolVisit.approvedHere = true;
+          patrolVisit.startedAt = Date.now();
+          // Short 2.5s cooldown so follow-up commands in the same chat can immediately auto-approve too
+          if (patrolVisit.key) {
+            patrolCooldowns.set(patrolVisit.key, { ts: Date.now(), ttl: 2500 });
+          }
+        }
+        setTimeout(() => runMultiProjectPatrol(), 900);
+      };
+
+      async function enableStatusGroupView() {
+        const displayBtn = document.querySelector('button[aria-label="Display Options"]');
+        if (!displayBtn) {
+          updateBar("⚠️ Không tìm thấy nút Display Options trong Sidebar!", "warning", 2500);
+          return false;
+        }
+        forceClick(displayBtn);
+        await smartDelay(200);
+        const groupTrigger = document.querySelector('[data-testid="group-by-submenu-trigger"]');
+        if (groupTrigger) {
+          forceClick(groupTrigger);
+          await smartDelay(200);
+          const statusOpt = document.querySelector('[data-testid="group-by-option-status"]');
+          if (statusOpt) {
+            forceClick(statusOpt);
+            updateBar("📊 Đã gom toàn bộ dự án đang chạy (In Progress) lên đầu!", "success", 3000);
+            return true;
+          }
+        }
+        return false;
+      }
+
+      async function switchToCascadeId(targetId) {
+        if (!targetId) return false;
+        let row = document.querySelector(`[data-testid="conversation-row-sidebar"][data-cascade-id="${targetId}"]`);
+        if (!row) {
+          const sc = document.querySelector('[data-testid="conversation-list-sidebar"]');
+          if (sc && sc.scrollHeight > sc.clientHeight) {
+            const origTop = sc.scrollTop;
+            const step = Math.max(460, Math.floor(sc.clientHeight * 0.88));
+            for (let y = 0, steps = 0; y <= sc.scrollHeight + step && steps < 25; y += step, steps++) {
+              sc.scrollTop = y;
+              sc.dispatchEvent(new Event("scroll", { bubbles: true }));
+              await smartDelay(60);
+              row = document.querySelector(`[data-testid="conversation-row-sidebar"][data-cascade-id="${targetId}"]`);
+              if (row) break;
+            }
+            if (!row) {
+              sc.scrollTop = origTop;
+              sc.dispatchEvent(new Event("scroll", { bubbles: true }));
+            }
+          }
+        }
+        if (row) {
+          const link = row.querySelector("a[href]") || row;
+          forceClick(link);
+          return true;
+        }
+        return false;
+      }
+
+      function pickPatrolCandidate(items, normActive, now) {
+        // Priority 1: Official Antigravity attention-dot / unread-ping badge
+        // Priority 2: Running (Stop execution) WITHOUT loading-spinner (potentially waiting/paused)
+        let tier1 = null;
+        let tier2 = null;
+
+        for (const item of items) {
+          if (item.selected) continue;
+          const key = item.cascadeId || normalizeTitleForMatch(item.title);
+          if (!key || (normActive && !item.cascadeId && normalizeTitleForMatch(item.title) === normActive)) {
+            continue;
+          }
+          const cd = patrolCooldowns.get(key);
+          if (cd && now - cd.ts < cd.ttl) continue;
+
+          if (item.hasAttentionBadge) {
+            tier1 = { ...item, key };
+            break;
+          }
+          if (!tier2 && item.hasStopBtn && !item.rowEl?.querySelector('[data-testid="status-loading-spinner"]')) {
+            tier2 = { ...item, key, ttlOverride: 60000 };
+          }
+        }
+        return tier1 || tier2;
+      }
+
       async function runMultiProjectPatrol() {
-        if (!isCurrentInstance() || isProcessing || isScanning) return;
+        if (!isCurrentInstance() || isProcessing || isScanning || patrolBusy) return;
+        const now = Date.now();
+        if (now - lastPatrolCheckAt < 2200) return;
+        lastPatrolCheckAt = now;
+
         const settings = await getSettings();
         if (!settings.enabled || !settings.multiProjectPatrol) return;
 
-        // Never interrupt if current chat already has an approval dialog
-        if (findApprovalDialog(settings)) return;
+        // If an approval card is open RIGHT HERE, process it immediately instead of leaving!
+        if (findApprovalDialog(settings)) {
+          scanAndProcess();
+          return;
+        }
 
-        // Never interrupt if user is actively typing in chat
+        // Never interrupt if user is actively typing or just interacted with UI
         const ae = document.activeElement;
         const isTypingFocus =
           ae &&
@@ -2473,36 +2814,111 @@
             ae.tagName === "INPUT" ||
             ae.isContentEditable ||
             ae.getAttribute("role") === "combobox");
-        if (isTypingFocus || Date.now() - lastUserTypeTime < 6000) return;
+        if (isTypingFocus || now - lastUserTypeTime < 6000 || now - lastUserInteractTime < 4500) {
+          return;
+        }
 
-        const activeChat = getCurrentConversationTitle() || "";
-        const normActive = normalizeTitleForMatch(activeChat);
-        const items = collectSidebarItems();
-        const now = Date.now();
+        patrolBusy = true;
+        try {
+          const activeChat = getCurrentConversationTitle() || "";
+          const normActive = normalizeTitleForMatch(activeChat);
+          let items = collectSidebarItems({ detectBadges: true });
+          const selectedItem = items.find((i) => i.selected);
 
-        for (const item of items) {
-          if (!item.hasAttentionBadge) continue;
-          const normItem = normalizeTitleForMatch(item.title);
-          if (!normItem || (normActive && (normItem === normActive || normItem.startsWith(normActive) || normActive.startsWith(normItem)))) {
-            continue;
+          // If we are inside an active patrol check visit, wait >= 2.2s before leaving
+          if (patrolVisit && now - patrolVisit.startedAt < 2200) {
+            return;
           }
-          const lastJump = patrolCooldowns.get(normItem) || 0;
-          if (now - lastJump < 25000) continue;
 
-          patrolCooldowns.set(normItem, now);
-          const shortTitle = item.title.length > 26 ? item.title.substring(0, 26) + "…" : item.title;
-          updateBar(`🔄 Tuần tra: Chuyển sang "${shortTitle}"`, "info", 2600);
-          forceClick(item.el);
-          setTimeout(scanAndProcess, 750);
-          break;
+          let candidate = pickPatrolCandidate(items, normActive, now);
+
+          // If none visible and sidebar is tall/virtualized, do non-intrusive scroll sweep every 18s
+          const sc = document.querySelector('[data-testid="conversation-list-sidebar"]');
+          if (
+            !candidate &&
+            sc &&
+            sc.scrollHeight > sc.clientHeight + 80 &&
+            now - lastSidebarHoverTime > 10000 &&
+            (sweepOrigTop !== null || now - lastSweepAt > 18000)
+          ) {
+            if (sweepOrigTop === null) {
+              sweepOrigTop = sc.scrollTop;
+              sweepOffset = 0;
+            }
+            const step = Math.max(460, Math.floor(sc.clientHeight * 0.88));
+            // Advance up to 4 virtualized viewports per cycle
+            for (let c = 0; c < 4 && sweepOffset <= sc.scrollHeight; c++) {
+              sc.scrollTop = sweepOffset;
+              sc.dispatchEvent(new Event("scroll", { bubbles: true }));
+              await smartDelay(60);
+              items = collectSidebarItems({ detectBadges: true });
+              candidate = pickPatrolCandidate(items, normActive, Date.now());
+              if (candidate) break;
+              sweepOffset += step;
+            }
+            if (!candidate && sweepOffset > sc.scrollHeight) {
+              sc.scrollTop = sweepOrigTop;
+              sc.dispatchEvent(new Event("scroll", { bubbles: true }));
+              sweepOrigTop = null;
+              sweepOffset = 0;
+              lastSweepAt = Date.now();
+            }
+          }
+
+          if (candidate) {
+            if (!patrolHomeCascadeId && settings.autoReturnHome !== false && selectedItem?.cascadeId) {
+              patrolHomeCascadeId = selectedItem.cascadeId;
+            }
+            patrolCooldowns.set(candidate.key, {
+              ts: Date.now(),
+              ttl: candidate.ttlOverride || 45000,
+            });
+            patrolVisit = {
+              key: candidate.key,
+              cascadeId: candidate.cascadeId,
+              startedAt: Date.now(),
+              approvedHere: false,
+            };
+            const shortTitle = candidate.title.length > 26 ? candidate.title.substring(0, 26) + "…" : candidate.title;
+            updateBar(`🔄 Tuần tra: Kiểm tra "${shortTitle}"`, "info", 2600);
+            forceClick(candidate.el);
+            await smartDelay(800);
+            scanAndProcess();
+            return;
+          }
+
+          // No more waiting candidates -> return to user's original conversation if needed
+          if (patrolVisit) {
+            const didApproveAny = patrolVisit.approvedHere;
+            patrolVisit = null;
+            const homeId = patrolHomeCascadeId;
+            patrolHomeCascadeId = null;
+            if (homeId && settings.autoReturnHome !== false && selectedItem?.cascadeId !== homeId) {
+              const ok = await switchToCascadeId(homeId);
+              if (ok) {
+                updateBar(
+                  didApproveAny ? "✓ Đã duyệt xong — quay về hội thoại gốc!" : "↩️ Quay về hội thoại gốc",
+                  "success",
+                  2400
+                );
+              }
+            }
+          }
+        } finally {
+          patrolBusy = false;
         }
       }
 
-      window.__AGY_PATROL_INTERVAL = setInterval(runMultiProjectPatrol, 4000);
+      window.__AGY_PATROL_INTERVAL = setInterval(runMultiProjectPatrol, 3500);
 
       // ─── 2-Way Bridge Heartbeat & Command Executor inside Iframe ────────────────
-      function executeBridgeCommand(cmd) {
+      const executedBridgeCmdIds = new Set();
+      async function executeBridgeCommand(cmd) {
         if (!cmd || !cmd.cmd) return;
+        if (cmd.id) {
+          if (executedBridgeCmdIds.has(cmd.id)) return;
+          executedBridgeCmdIds.add(cmd.id);
+        }
         const args = cmd.args || {};
 
         switch (cmd.cmd) {
@@ -2515,9 +2931,85 @@
             updateBar("🤖 AI Bridge đã đọc DOM Sidebar!", "info", 2200);
             break;
 
+          case "ENABLE_STATUS_GROUP": {
+            const ok = await enableStatusGroupView();
+            sendBridgeResult(cmd.id, "ENABLE_STATUS_GROUP", ok);
+            break;
+          }
+
+          case "SWEEP_SIDEBAR": {
+            const sweepRes = await sweepSidebarConversations();
+            const attentionList = sweepRes.conversations.filter((c) => c.hasAttentionBadge || c.hasStopBtn);
+            const reportText = "=== AGY FULL SIDEBAR SWEEP ===\n" + JSON.stringify(sweepRes, null, 2);
+            sendBridgeResult(cmd.id, "SWEEP_SIDEBAR", true, {
+              totalProjects: sweepRes.totalProjects,
+              totalConversations: sweepRes.totalConversations,
+              attentionCount: attentionList.length,
+              attentionConversations: attentionList,
+              domReport: reportText,
+            });
+            break;
+          }
+
+          case "INSPECT_UI": {
+            const uiReport = buildInspectUiReport();
+            sendBridgeResult(cmd.id, "INSPECT_UI", true, {
+              activeChat: getCurrentConversationTitle(),
+              domReport: uiReport,
+            });
+            break;
+          }
+
+          case "PROBE_DISPLAY_OPTIONS": {
+            const btn = document.querySelector('button[aria-label="Display Options"]');
+            if (!btn) {
+              sendBridgeResult(cmd.id, "PROBE_DISPLAY_OPTIONS", false, { error: "Display Options button not found" });
+              break;
+            }
+            forceClick(btn);
+            await smartDelay(280);
+            const report = buildInspectUiReport();
+            document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, bubbles: true }));
+            btn.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, bubbles: true }));
+            sendBridgeResult(cmd.id, "PROBE_DISPLAY_OPTIONS", true, { domReport: report });
+            break;
+          }
+
+          case "SWITCH_BY_ID": {
+            const cid = args.cascadeId || "";
+            const title = args.title || "";
+            let ok = false;
+            if (cid) {
+              ok = await switchToCascadeId(cid);
+            } else {
+              const row = collectSidebarItems({ detectBadges: false }).find((i) =>
+                normalizeTitleForMatch(i.title).includes(normalizeTitleForMatch(title))
+              )?.rowEl;
+              if (row) {
+                forceClick(row.querySelector("a[href]") || row);
+                ok = true;
+              }
+            }
+            if (ok) {
+              await smartDelay(args.waitMs || 900);
+              const dlg = findApprovalDialog();
+              sendBridgeResult(cmd.id, "SWITCH_BY_ID", true, {
+                activeChat: getCurrentConversationTitle(),
+                hasApprovalDialog: !!dlg,
+                approvalOptNumber: dlg ? dlg.optNumber : null,
+                approvalCardText: dlg ? (dlg.card.innerText || "").slice(0, 600) : null,
+              });
+            } else {
+              sendBridgeResult(cmd.id, "SWITCH_BY_ID", false, { error: "Row not found", cid, title });
+            }
+            break;
+          }
+
           case "TRIGGER_SEARCH": {
             const ok = triggerSearchDialog();
-            sendBridgeResult(cmd.id, "TRIGGER_SEARCH", ok);
+            await smartDelay(280);
+            const report = buildInspectUiReport();
+            sendBridgeResult(cmd.id, "TRIGGER_SEARCH", ok, { domReport: report });
             break;
           }
 
@@ -2569,7 +3061,7 @@
       function sendIframeBridgeHeartbeat() {
         if (!isCurrentInstance()) return;
         const activeChat = getCurrentConversationTitle();
-        const items = collectSidebarItems({ detectBadges: false });
+        const items = collectSidebarItems({ detectBadges: true });
         const hasApprovalDialog = !!findApprovalDialog();
 
         try {
@@ -2595,9 +3087,12 @@
                 activeChat,
                 sidebarCount: items.length,
                 hasApprovalDialog,
-                sidebarPreview: items.slice(0, 15).map((i) => ({
+                sidebarPreview: items.slice(0, 20).map((i) => ({
+                  cascadeId: i.cascadeId,
                   title: i.title,
+                  selected: i.selected,
                   hasAttentionBadge: i.hasAttentionBadge,
+                  hasStopBtn: i.hasStopBtn,
                 })),
                 timestamp: Date.now(),
               },
@@ -2630,8 +3125,17 @@
       window.__AGY_BRIDGE_INTERVAL = setInterval(sendIframeBridgeHeartbeat, 1400);
       setTimeout(sendIframeBridgeHeartbeat, 500);
 
-      // Listen for broadcasts from top frame
+      // Listen for broadcasts & relayed wakeup/bridge commands from top frame
       addSafeListener(window, "message", (e) => {
+        if (e.data && e.data.type === "AGY_HEARTBEAT_TICK_V24") {
+          flushTickWaiters();
+          scanAndProcess();
+          runMultiProjectPatrol();
+          return;
+        }
+        if (e.data && e.data.type === "AGY_BRIDGE_EXEC_V23") {
+          executeBridgeCommand(e.data.cmd);
+        }
         if (e.data && e.data.type === "AGY_TOGGLE_PROMPT") {
           isPromptHidden = !!e.data.hidden;
           applyPromptVisibility();
@@ -2654,6 +3158,9 @@
         if (e.data && e.data.type === "AGY_PING_PROOF_REQ") {
           sendProofSnapshot(null, "Kiểm tra thủ công từ Thanh điều khiển", lastBridgeOnline);
         }
+        if (e.data && e.data.type === "AGY_ENABLE_STATUS_GROUP_V24") {
+          enableStatusGroupView();
+        }
       });
 
       // Also listen to popup requests via chrome.runtime.onMessage
@@ -2664,6 +3171,8 @@
             dumpSidebarDom({ copyClipboard: true });
           } else if (msg.type === "AGY_PING_PROOF_REQ") {
             sendProofSnapshot(null, "Kiểm tra từ Popup Extension", lastBridgeOnline);
+          } else if (msg.type === "AGY_ENABLE_STATUS_GROUP_V24") {
+            enableStatusGroupView();
           }
         });
       } catch (err) {}
@@ -2698,7 +3207,7 @@
     scanAndProcess();
   }
 
-  console.log(`[AGY Auto-Approve] v22 (Extension Bridge) active | frame: ${isTop ? "TOP" : "IFRAME"}`);
+  console.log(`[AGY Auto-Approve] v${AGY_VERSION} (Extension Bridge) active | frame: ${isTop ? "TOP" : "IFRAME"}`);
 })();
 
 

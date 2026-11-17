@@ -20,6 +20,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+sys.dont_write_bytecode = True  # Prevent __pycache__ folder (Chrome blocks _* dirs in extensions)
+
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("AGY_BRIDGE_PORT", "9333"))
 BASE_DIR = Path(__file__).resolve().parent
@@ -89,7 +91,7 @@ def update_state(payload: dict) -> dict:
         return state
 
 
-def take_pending_command(frame: str, iframe_recently_seen: bool) -> list:
+def take_pending_command(frame: str, iframe_recently_seen: bool, can_top_relay: bool = False) -> list:
     with FILE_LOCK:
         if not CMD_FILE.exists():
             return []
@@ -98,12 +100,15 @@ def take_pending_command(frame: str, iframe_recently_seen: bool) -> list:
             return []
 
         target = cmd.get("targetFrame", "iframe")
-        # If target is iframe, wait for iframe frame unless caller explicitly wants top/any
+        # If target is iframe: allow immediate top relay when top supports postMessage relay,
+        # otherwise wait for iframe poll (with optional absent-iframe fallback).
         if target == "iframe" and frame != "iframe":
-            # Fallback to top ONLY if cmd is > 2s old and iframe is absent
-            age = time.time() - float(cmd.get("createdAt", time.time()))
-            if not (not iframe_recently_seen and age > 2.0 and cmd.get("allowTopFallback", True)):
-                return []
+            if frame == "top" and can_top_relay:
+                pass  # top will immediately relay via postMessage to wake throttled iframe
+            else:
+                age = time.time() - float(cmd.get("createdAt", time.time()))
+                if not (not iframe_recently_seen and age > 2.0 and cmd.get("allowTopFallback", True)):
+                    return []
         elif target == "top" and frame != "top":
             return []
 
@@ -179,7 +184,11 @@ class BridgeHandler(BaseHTTPRequestHandler):
             payload = self._read_json_body()
             state = update_state(payload)
             frame = payload.get("frame", "unknown")
-            cmds = take_pending_command(frame, bool(state.get("iframeConnected")))
+            cmds = take_pending_command(
+                frame,
+                bool(state.get("iframeConnected")),
+                bool(payload.get("supportsRelay")),
+            )
             self._send_json(
                 200,
                 {
@@ -238,14 +247,24 @@ class ReusableThreadingHTTPServer(ThreadingHTTPServer):
 
 
 def main():
-    # Initialize empty state file on startup
-    update_state({"frame": "server_boot", "message": "Bridge Server ready"})
     try:
         server = ReusableThreadingHTTPServer((HOST, PORT), BridgeHandler)
     except OSError as exc:
+        # Check if an existing AGY-Bridge instance is already live on HOST:PORT
+        try:
+            import urllib.request
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(f"http://{HOST}:{PORT}/ping", timeout=1.5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if data.get("server") == "AGY-Bridge":
+                    print(f"[AGY-Bridge] Already running on http://{HOST}:{PORT}", flush=True)
+                    sys.exit(0)
+        except Exception:
+            pass
         print(f"[AGY-Bridge] Could not bind {HOST}:{PORT}: {exc}", file=sys.stderr)
         sys.exit(1)
 
+    update_state({"frame": "server_boot", "message": "Bridge Server ready"})
     print(f"[AGY-Bridge] Listening on http://{HOST}:{PORT} | .bridge dir: {BRIDGE_DIR}", flush=True)
     try:
         server.serve_forever()
