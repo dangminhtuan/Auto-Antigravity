@@ -8,7 +8,7 @@
  */
 
 (() => {
-  const AGY_VERSION = "1.0.27";
+  const AGY_VERSION = "1.0.28";
   // ─── Guard: Strictly run ONLY inside Antigravity / AI Studio (never google.com/search) ─
   const currentUrl = window.location.href.toLowerCase();
   const isTop = window.self === window.top;
@@ -58,6 +58,8 @@
     if (window.__AGY_OBSERVER) window.__AGY_OBSERVER.disconnect();
     try { delete window.__AGY_CHECK_IDLE_BG; } catch (e) {}
     try { delete window.__AGY_MARK_RUNNING; } catch (e) {}
+    try { delete window.__AGY_BEFORE_SCAN_REVEAL; } catch (e) {}
+    try { delete window.__AGY_AFTER_APPROVAL_RESTORE; } catch (e) {}
     try {
       document.body?.classList.remove("agy-idle-light", "agy-idle-dark");
       document.querySelectorAll("[data-agy-idle-pane], [data-agy-idle-scroller], [data-agy-idle-footer], [data-agy-idle-card], [data-agy-idle-body]").forEach((el) => {
@@ -1100,7 +1102,7 @@
           lowerCard.includes("always allow") ||
           (lowerCard.includes("tell the agent what to do instead") && card.querySelectorAll('input[type="radio"], [role="radio"], div').length >= 3);
 
-        if (rect.height > 55 && rect.height < 720 && hasAllowKeywords) {
+        if (rect.height > 55 && rect.height < 960 && hasAllowKeywords) {
           validCard = card;
           break;
         }
@@ -1384,6 +1386,7 @@
 
     lastProcessedKey = dialogKey;
     isProcessing = false;
+    window.__AGY_LAST_APPROVAL_DONE_AT = Date.now();
     if (typeof window.__AGY_ON_APPROVAL_DONE === "function") {
       try { window.__AGY_ON_APPROVAL_DONE(); } catch (e) {}
     }
@@ -1395,11 +1398,17 @@
     if (!isCurrentInstance() || isProcessing || isScanning) return;
     isScanning = true;
     try {
+      if (typeof window.__AGY_BEFORE_SCAN_REVEAL === "function") {
+        window.__AGY_BEFORE_SCAN_REVEAL();
+      }
       const settings = await getSettings();
       if (!isCurrentInstance() || isProcessing) return;
 
       const dialog = findApprovalDialog(settings);
       if (!dialog) {
+        if (typeof window.__AGY_AFTER_APPROVAL_RESTORE === "function") {
+          window.__AGY_AFTER_APPROVAL_RESTORE();
+        }
         return;
       }
 
@@ -1911,11 +1920,43 @@
             opacity: 0 !important;
             pointer-events: none !important;
           }
+          /* Fail-safe: NEVER hide a container holding radio options / approval prompt */
+          body.agy-reading-mode .agy-hidden-prompt-container:has(input[type="radio"], [role="radio"], [role="option"]),
+          body.agy-reading-mode [data-agy-prompt-hidden="1"]:has(input[type="radio"], [role="radio"], [role="option"]) {
+            display: block !important;
+            height: auto !important;
+            min-height: initial !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow: visible !important;
+            opacity: 1 !important;
+            pointer-events: auto !important;
+          }
         `;
         document.head.appendChild(style);
       }
 
       let isPromptHidden = false;
+      let pausedReadingForApproval = false;
+
+      function isApprovalContainerNode(el) {
+        if (!el) return false;
+        const txt = normalizeOptionText(el.textContent || "");
+        if (
+          txt.includes("yes, allow this time") ||
+          txt.includes("yes, and always allow") ||
+          txt.includes("tell the agent what to do instead")
+        ) {
+          return true;
+        }
+        if (el.querySelectorAll('input[type="radio"], [role="radio"], [role="option"]').length >= 2) {
+          return true;
+        }
+        const hasSubmitBtn = Array.from(el.querySelectorAll('button, [role="button"], input[type="submit"]')).some((b) =>
+          /^submit(\s+↵)?$/i.test((b.textContent || "").trim())
+        );
+        return hasSubmitBtn && (txt.includes("allow") || txt.includes("waiting for user input"));
+      }
 
       function findRealChatInputBox() {
         const candidates = Array.from(
@@ -1944,6 +1985,16 @@
           const parent = cur.parentElement;
           if (parent.matches("main, nav, aside, header, [role='dialog']")) break;
           if (parent.classList.contains("overflow-y-auto")) break;
+          if (isApprovalContainerNode(parent)) break;
+          // Do not swallow sibling Approval cards or action banners sitting above the input card
+          const hasSiblingInteractiveCard = Array.from(parent.children).some(
+            (ch) =>
+              ch !== cur &&
+              !cur.contains(ch) &&
+              (ch.textContent || "").trim().length > 0 &&
+              (isApprovalContainerNode(ch) || !!ch.querySelector('input[type="radio"], [role="radio"], button, [class*="rounded-"]'))
+          );
+          if (hasSiblingInteractiveCard) break;
           // Stop before climbing into the parent flex column that holds the sibling message feed
           const hasSiblingFeed = Array.from(parent.querySelectorAll(".overflow-y-auto")).some(
             (sc) => !cur.contains(sc) && sc !== cur && sc.getBoundingClientRect().height > 100
@@ -1975,15 +2026,22 @@
 
       function applyPromptVisibility() {
         if (isPromptHidden) {
-          document.body.classList.add("agy-reading-mode");
           const box = findRealChatInputBox();
           const containerToHide = findPromptContainerToHide(box);
+          if (containerToHide && isApprovalContainerNode(containerToHide)) {
+            pausedReadingForApproval = true;
+            document.body.classList.remove("agy-reading-mode");
+            updateBar("⚠️ Đang có hộp thoại duyệt — tạm giữ hiển thị để xử lý!", "warning", 2000);
+            return;
+          }
+          document.body.classList.add("agy-reading-mode");
           if (containerToHide) {
             containerToHide.classList.add("agy-hidden-prompt-container");
             containerToHide.setAttribute("data-agy-prompt-hidden", "1");
           }
           updateBar("📖 Đã ẩn ô soạn thảo — Chế độ đọc rộng", "info", 1500);
         } else {
+          pausedReadingForApproval = false;
           document.body.classList.remove("agy-reading-mode");
           document.querySelectorAll('.agy-hidden-prompt-container, [data-agy-prompt-hidden="1"]').forEach((el) => {
             el.classList.remove("agy-hidden-prompt-container");
@@ -2003,9 +2061,43 @@
 
         const sc = findChatScroller();
         if (sc) {
-          sc.style.paddingBottom = isPromptHidden ? "160px" : "170px";
+          sc.style.paddingBottom = isPromptHidden && !pausedReadingForApproval ? "160px" : "170px";
         }
       }
+
+      window.__AGY_BEFORE_SCAN_REVEAL = () => {
+        const hiddenNodes = Array.from(
+          document.querySelectorAll('.agy-hidden-prompt-container, [data-agy-prompt-hidden="1"]')
+        );
+        if (hiddenNodes.length === 0) return;
+        let revealed = false;
+        for (const el of hiddenNodes) {
+          if (isApprovalContainerNode(el)) {
+            el.classList.remove("agy-hidden-prompt-container");
+            el.removeAttribute("data-agy-prompt-hidden");
+            el.style.display = "";
+            revealed = true;
+          }
+        }
+        if (revealed) {
+          pausedReadingForApproval = true;
+          document.body.classList.remove("agy-reading-mode");
+          const sc = findChatScroller();
+          if (sc) sc.style.paddingBottom = "170px";
+          updateBar("⚠️ Hộp duyệt nằm trong vùng ẩn — tự mở ra để duyệt!", "warning", 2200);
+        }
+      };
+
+      window.__AGY_AFTER_APPROVAL_RESTORE = () => {
+        if (!pausedReadingForApproval || !isPromptHidden || isProcessing) return;
+        const doneAt = Number(window.__AGY_LAST_APPROVAL_DONE_AT || 0);
+        if (Date.now() - doneAt < 1000) return;
+        const box = findRealChatInputBox();
+        const target = findPromptContainerToHide(box);
+        if (target && isApprovalContainerNode(target)) return;
+        pausedReadingForApproval = false;
+        applyPromptVisibility();
+      };
 
       // Quick Send Handler: injects exactly ONE char, triggers React/Lexical state, clicks Send arrow button
       function handleQuickSend(char) {
@@ -3405,6 +3497,7 @@
         }
         if (e.data && e.data.type === "AGY_TOGGLE_PROMPT") {
           isPromptHidden = !!e.data.hidden;
+          pausedReadingForApproval = false;
           applyPromptVisibility();
         }
         if (e.data && e.data.type === "AGY_QUICK_SEND_V20") {
