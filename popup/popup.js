@@ -2,16 +2,18 @@
  * popup.js — Logic for AGY Auto-Approve popup UI
  */
 
-const elEnabled    = document.getElementById("toggle-enabled");
-const elDelaySafe  = document.getElementById("delay-safe");
-const elDelayDang  = document.getElementById("delay-danger");
-const elTargetOpt  = document.getElementById("target-option");
-const elBtnSave    = document.getElementById("btn-save");
-const elSaveMsg    = document.getElementById("save-msg");
-const elStatusBar  = document.getElementById("status-bar");
-const elStatusText = document.getElementById("status-text");
-const elLogList    = document.getElementById("log-list");
-const elBtnClear   = document.getElementById("btn-clear-log");
+const elEnabled     = document.getElementById("toggle-enabled");
+const elDelaySafe   = document.getElementById("delay-safe");
+const elDelayDang   = document.getElementById("delay-danger");
+const elTargetOpt   = document.getElementById("target-option");
+const elMultiPatrol = document.getElementById("toggle-multi-patrol");
+const elBtnSave     = document.getElementById("btn-save");
+const elBtnCopyDom  = document.getElementById("btn-copy-dom");
+const elSaveMsg     = document.getElementById("save-msg");
+const elStatusBar   = document.getElementById("status-bar");
+const elStatusText  = document.getElementById("status-text");
+const elLogList     = document.getElementById("log-list");
+const elBtnClear    = document.getElementById("btn-clear-log");
 
 // ── Load settings ───────────────────────────────────────────────────────────
 
@@ -20,13 +22,15 @@ async function loadSettings() {
     enabled: true,
     delaySafe: 1,
     delayDangerous: 1,
-    targetOption: 4,
+    targetOption: 0, // 0 = Auto (Max - 1)
+    multiProjectPatrol: true,
   });
 
   elEnabled.checked    = settings.enabled;
   elDelaySafe.value    = settings.delaySafe;
   elDelayDang.value    = settings.delayDangerous;
-  if (elTargetOpt) elTargetOpt.value = settings.targetOption;
+  if (elTargetOpt) elTargetOpt.value = String(settings.targetOption);
+  if (elMultiPatrol) elMultiPatrol.checked = !!settings.multiProjectPatrol;
 
   updateStatusBar(settings.enabled);
 }
@@ -55,20 +59,35 @@ elEnabled.addEventListener("change", async () => {
 // ── Save delay settings ─────────────────────────────────────────────────────
 
 elBtnSave.addEventListener("click", async () => {
-  const delaySafe      = Math.max(1, parseInt(elDelaySafe.value) || 5);
-  const delayDangerous = Math.max(1, parseInt(elDelayDang.value) || 120);
-  const targetOption   = parseInt(elTargetOpt?.value) || 4;
+  const delaySafe          = Math.max(1, parseInt(elDelaySafe.value) || 1);
+  const delayDangerous     = Math.max(1, parseInt(elDelayDang.value) || 1);
+  const targetOption       = parseInt(elTargetOpt?.value) || 0;
+  const multiProjectPatrol = elMultiPatrol ? elMultiPatrol.checked : true;
 
   // Sanitize display
   elDelaySafe.value = delaySafe;
   elDelayDang.value = delayDangerous;
 
-  await chrome.storage.sync.set({ delaySafe, delayDangerous, targetOption });
+  await chrome.storage.sync.set({ delaySafe, delayDangerous, targetOption, multiProjectPatrol });
 
   // Show save confirmation
   elSaveMsg.hidden = false;
   setTimeout(() => { elSaveMsg.hidden = true; }, 1500);
 });
+
+// ── Copy Sidebar DOM for AI inspection ──────────────────────────────────────
+
+if (elBtnCopyDom) {
+  elBtnCopyDom.addEventListener("click", async () => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]?.id) {
+        chrome.tabs.sendMessage(tabs[0].id, { type: "AGY_DUMP_SIDEBAR_REQ" }).catch(() => {});
+        elBtnCopyDom.textContent = "✓ Da gui!";
+        setTimeout(() => { elBtnCopyDom.textContent = "📋 Soi DOM"; }, 1500);
+      }
+    });
+  });
+}
 
 
 // ── Load & render log ───────────────────────────────────────────────────────
