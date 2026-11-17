@@ -8,7 +8,7 @@
  */
 
 (() => {
-  const AGY_VERSION = "1.0.25";
+  const AGY_VERSION = "1.0.26";
   // ─── Guard: Strictly run ONLY inside Antigravity / AI Studio (never google.com/search) ─
   const currentUrl = window.location.href.toLowerCase();
   const isTop = window.self === window.top;
@@ -126,7 +126,7 @@
       container.id = "agy-control-container";
       container.style.cssText = `
         position: fixed !important;
-        bottom: 10px !important;
+        bottom: 8px !important;
         left: 50% !important;
         right: auto !important;
         top: auto !important;
@@ -539,12 +539,12 @@
           bottom: 12px !important;
           right: 14px !important;
           z-index: 2147483647 !important;
-          width: 44px; height: 44px; border-radius: 50%;
+          width: 52px; height: 52px; border-radius: 50%;
           display: none; align-items: center; justify-content: center;
           background: rgba(15, 23, 42, 0.88);
           border: 2px solid rgba(56, 189, 248, 0.65);
           box-shadow: 0 4px 18px rgba(0, 0, 0, 0.48);
-          color: #38bdf8; font-size: 20px; cursor: pointer;
+          color: #38bdf8; font-size: 24px; cursor: pointer;
           pointer-events: auto; touch-action: manipulation;
           backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
           transition: transform 0.15s ease;
@@ -563,36 +563,38 @@
       const row = document.createElement("div");
       row.id = "agy-dock-row";
       row.style.cssText = `
-        display: flex; flex-direction: column; align-items: center; gap: 6px;
-        max-width: calc(100vw - 12px);
+        display: flex; flex-direction: column; align-items: stretch; gap: 10px;
+        width: min(calc(100vw - 14px), 440px);
+        max-width: calc(100vw - 10px);
+        box-sizing: border-box;
         pointer-events: auto;
-        background: rgba(15, 23, 42, 0.74);
+        background: rgba(15, 23, 42, 0.78);
         backdrop-filter: blur(16px) saturate(160%);
         -webkit-backdrop-filter: blur(16px) saturate(160%);
         border: 1px solid rgba(255, 255, 255, 0.22);
-        border-radius: 22px;
-        padding: 6px 10px;
-        box-shadow: 0 8px 26px rgba(0, 0, 0, 0.42);
+        border-radius: 24px;
+        padding: 9px 11px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
         user-select: none;
       `;
 
       const row1 = document.createElement("div");
-      row1.style.cssText = "display: flex; align-items: center; justify-content: center; gap: 7px;";
+      row1.style.cssText = "width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px;";
 
       const row2 = document.createElement("div");
-      row2.style.cssText = "display: flex; align-items: center; justify-content: center; gap: 8px;";
+      row2.style.cssText = "width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px;";
 
-      // Helper for large touch-friendly buttons
-      function createDockBtn(id, html, title, color, bg, border, widthPx = 40, heightPx = 40, radiusPx = 20, fontSizePx = 16) {
+      // Helper for full-width responsive large touch targets with wide separation
+      function createDockBtn(id, html, title, color, bg, border, flexVal = 1, heightPx = 48, radiusPx = 16, fontSizePx = 21) {
         const btn = document.createElement("button");
         btn.id = id;
         btn.innerHTML = html;
         btn.title = title;
         btn.style.cssText = `
-          width: ${widthPx}px; height: ${heightPx}px; border-radius: ${radiusPx}px;
+          flex: ${flexVal}; min-width: 0; height: ${heightPx}px; border-radius: ${radiusPx}px;
           display: flex; align-items: center; justify-content: center;
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-          font-size: ${fontSizePx}px; font-weight: 700;
+          font-size: ${fontSizePx}px; font-weight: 800;
           color: ${color};
           background: ${bg};
           border: 1px solid ${border};
@@ -600,10 +602,10 @@
           box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
           touch-action: manipulation;
           transition: transform 0.12s ease, filter 0.12s ease, background 0.15s ease, border-color 0.15s ease;
-          padding: 0; flex-shrink: 0;
+          padding: 0;
         `;
         btn.addEventListener("pointerdown", () => {
-          btn.style.transform = "scale(0.9)";
+          btn.style.transform = "scale(0.92)";
           btn.style.filter = "brightness(1.18)";
         });
         btn.addEventListener("pointerup", () => {
@@ -617,20 +619,20 @@
         return btn;
       }
 
-      // ── ROW 1: Utilities (40x40 circular targets) ────────────────────────────
+      // ── ROW 1: Large Spaced Utilities (48px tall, flex across dock, 10px gap) ─
 
       // 0. Live Proof-of-Control LED Status Button
       const ledBtn = createDockBtn(
         "agy-bridge-led",
-        `<span style="width:12px;height:12px;border-radius:50%;display:block;background:#ef4444;box-shadow:0 0 8px rgba(239,68,68,0.8);transition:all 0.25s ease;"></span>`,
+        `<span style="width:14px;height:14px;border-radius:50%;display:block;background:#ef4444;box-shadow:0 0 8px rgba(239,68,68,0.8);transition:all 0.25s ease;"></span>`,
         "Kiểm tra trạng thái AI Bridge & Iframe",
         "#ffffff",
         "rgba(255, 255, 255, 0.08)",
         "rgba(255, 255, 255, 0.2)",
-        40,
-        40,
-        20,
-        14
+        1,
+        48,
+        16,
+        16
       );
       addSafeListener(ledBtn, "click", (e) => {
         e.stopPropagation();
@@ -654,11 +656,11 @@
         "Mở hoặc Đóng hộp tìm kiếm dự án (Ctrl+K)",
         "#f8fafc",
         "rgba(255, 255, 255, 0.08)",
-        "rgba(255, 255, 255, 0.16)",
-        40,
-        40,
-        20,
-        17
+        "rgba(255, 255, 255, 0.18)",
+        1,
+        48,
+        16,
+        21
       );
       addSafeListener(searchBtn, "click", (e) => {
         e.stopPropagation();
@@ -675,20 +677,20 @@
         "agy-toggle-prompt-btn",
         "📖",
         "Ẩn hoặc hiện ô nhập để tối đa không gian đọc",
-        "rgba(255, 255, 255, 0.88)",
+        "rgba(255, 255, 255, 0.9)",
         "rgba(255, 255, 255, 0.08)",
         "rgba(255, 255, 255, 0.18)",
-        40,
-        40,
-        20,
-        17
+        1,
+        48,
+        16,
+        21
       );
       toggleBtn.dataset.hidden = "0";
       function syncPromptBtnUi(hidden) {
         toggleBtn.dataset.hidden = hidden ? "1" : "0";
         toggleBtn.innerHTML = hidden ? "✏️" : "📖";
         toggleBtn.title = hidden ? "Hiện lại ô soạn thảo" : "Ẩn ô nhập để đọc tràn viền";
-        toggleBtn.style.color = hidden ? "rgba(56, 189, 248, 0.95)" : "rgba(255, 255, 255, 0.88)";
+        toggleBtn.style.color = hidden ? "rgba(56, 189, 248, 0.95)" : "rgba(255, 255, 255, 0.9)";
         toggleBtn.style.borderColor = hidden ? "rgba(56, 189, 248, 0.5)" : "rgba(255, 255, 255, 0.18)";
         toggleBtn.style.background = hidden ? "rgba(56, 189, 248, 0.18)" : "rgba(255, 255, 255, 0.08)";
       }
@@ -712,10 +714,10 @@
         "#f59e0b",
         "rgba(245, 158, 11, 0.16)",
         "rgba(245, 158, 11, 0.42)",
-        40,
-        40,
-        20,
-        16
+        1,
+        48,
+        16,
+        20
       );
       addSafeListener(dumpBtn, "click", (e) => {
         e.stopPropagation();
@@ -736,10 +738,10 @@
         "#cbd5e1",
         "rgba(255, 255, 255, 0.08)",
         "rgba(255, 255, 255, 0.18)",
-        40,
-        40,
-        20,
-        18
+        1,
+        48,
+        16,
+        22
       );
       addSafeListener(collapseBtn, "click", (e) => {
         e.stopPropagation();
@@ -749,16 +751,16 @@
       });
       row1.appendChild(collapseBtn);
 
-      // ── ROW 2: Primary Thumb Quick-Send & Submit (46px tall pills) ────────────
+      // ── ROW 2: Wide Thumb Quick-Send & Submit (56px tall, 12px gap) ─────────
 
       const shortcuts = [
-        { char: "u", w: 50, color: "#38bdf8", bg: "rgba(56, 189, 248, 0.2)", border: "rgba(56, 189, 248, 0.48)", label: "Gửi nhanh 'u' (cài APK / update)" },
-        { char: "o", w: 54, color: "#34d399", bg: "rgba(52, 211, 153, 0.2)", border: "rgba(52, 211, 153, 0.48)", label: "Gửi nhanh 'o' (đồng ý / proceed)" },
-        { char: "d", w: 50, color: "#fbbf24", bg: "rgba(251, 191, 36, 0.2)", border: "rgba(251, 191, 36, 0.48)", label: "Gửi nhanh 'd' (đã gửi hình, chờ text)" },
+        { char: "u", color: "#38bdf8", bg: "rgba(56, 189, 248, 0.22)", border: "rgba(56, 189, 248, 0.5)", label: "Gửi nhanh 'u' (cài APK / update)" },
+        { char: "o", color: "#34d399", bg: "rgba(52, 211, 153, 0.22)", border: "rgba(52, 211, 153, 0.5)", label: "Gửi nhanh 'o' (đồng ý / proceed)" },
+        { char: "d", color: "#fbbf24", bg: "rgba(251, 191, 36, 0.22)", border: "rgba(251, 191, 36, 0.5)", label: "Gửi nhanh 'd' (đã gửi hình, chờ text)" },
       ];
 
-      shortcuts.forEach(({ char, w, color, bg, border, label }) => {
-        const btn = createDockBtn(`agy-quick-${char}`, char, label, color, bg, border, w, 46, 14, 18);
+      shortcuts.forEach(({ char, color, bg, border, label }) => {
+        const btn = createDockBtn(`agy-quick-${char}`, char, label, color, bg, border, 1, 56, 16, 24);
         btn.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace";
         addSafeListener(btn, "click", (e) => {
           e.stopPropagation();
@@ -774,11 +776,11 @@
         row2.appendChild(btn);
       });
 
-      // Native-style Blue Arrow Send Button (wider 58x46 pill for easy thumb tap)
+      // Native-style Blue Arrow Send Button (extra wide thumb pill)
       const sendNowBtn = createDockBtn(
         "agy-quick-submit-btn",
         `
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" style="display:block;">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" style="display:block;">
           <line x1="5" y1="12" x2="19" y2="12"></line>
           <polyline points="12 5 19 12 12 19"></polyline>
         </svg>
@@ -787,10 +789,10 @@
         "#ffffff",
         "#1a73e8",
         "rgba(255, 255, 255, 0.35)",
-        58,
-        46,
-        14,
-        16
+        1.25,
+        56,
+        16,
+        18
       );
       sendNowBtn.style.boxShadow = "0 3px 10px rgba(26, 115, 232, 0.55)";
 
@@ -1870,12 +1872,12 @@
 
           /* 3. Bottom breathing room so 2-row floating dock never hides chat footer */
           body:not(.agy-reading-mode) .overflow-y-auto:not([contenteditable="true"]):not([role="combobox"]):not([data-testid="conversation-list-sidebar"] *) {
-            padding-bottom: 150px !important;
+            padding-bottom: 170px !important;
           }
 
           /* 4. Reading Mode: hide ONLY verified prompt composer containers (never Search modal or chat feed) */
           body.agy-reading-mode .overflow-y-auto:not([contenteditable="true"]):not([role="combobox"]):not([data-testid="conversation-list-sidebar"] *) {
-            padding-bottom: 110px !important;
+            padding-bottom: 160px !important;
           }
           body.agy-reading-mode .agy-hidden-prompt-container,
           body.agy-reading-mode [data-agy-prompt-hidden="1"] {
@@ -1973,14 +1975,14 @@
             containerToShow.classList.remove("agy-hidden-prompt-container");
             containerToShow.removeAttribute("data-agy-prompt-hidden");
             containerToShow.style.display = "";
-            if (isTouch) containerToShow.style.marginBottom = "54px";
+            if (isTouch) containerToShow.style.marginBottom = "62px";
           }
           updateBar("✏️ Đã hiện lại ô soạn thảo", "info", 1500);
         }
 
         const sc = findChatScroller();
         if (sc) {
-          sc.style.paddingBottom = isPromptHidden ? "110px" : "150px";
+          sc.style.paddingBottom = isPromptHidden ? "160px" : "170px";
         }
       }
 
@@ -3424,8 +3426,8 @@
         // Find outer prompt card container safely without touching Search modal
         const card = findPromptContainerToHide(box);
 
-        if (card && card.style.marginBottom !== "54px") {
-          card.style.marginBottom = "54px";
+        if (card && card.style.marginBottom !== "62px") {
+          card.style.marginBottom = "62px";
           card.style.transition = "margin-bottom 0.25s ease";
         }
       }
