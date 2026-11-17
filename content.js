@@ -8,7 +8,7 @@
  */
 
 (() => {
-  const AGY_VERSION = "1.0.26";
+  const AGY_VERSION = "1.0.27";
   // ─── Guard: Strictly run ONLY inside Antigravity / AI Studio (never google.com/search) ─
   const currentUrl = window.location.href.toLowerCase();
   const isTop = window.self === window.top;
@@ -54,13 +54,27 @@
     if (window.__AGY_TOP_LED_INTERVAL) clearInterval(window.__AGY_TOP_LED_INTERVAL);
     if (window.__AGY_TOP_BRIDGE_INTERVAL) clearInterval(window.__AGY_TOP_BRIDGE_INTERVAL);
     if (window.__AGY_TOP_TICK_INTERVAL) clearInterval(window.__AGY_TOP_TICK_INTERVAL);
+    if (window.__AGY_IDLE_BG_INTERVAL) clearInterval(window.__AGY_IDLE_BG_INTERVAL);
     if (window.__AGY_OBSERVER) window.__AGY_OBSERVER.disconnect();
+    try { delete window.__AGY_CHECK_IDLE_BG; } catch (e) {}
+    try { delete window.__AGY_MARK_RUNNING; } catch (e) {}
+    try {
+      document.body?.classList.remove("agy-idle-light", "agy-idle-dark");
+      document.querySelectorAll("[data-agy-idle-pane], [data-agy-idle-scroller], [data-agy-idle-footer], [data-agy-idle-card], [data-agy-idle-body]").forEach((el) => {
+        el.removeAttribute("data-agy-idle-pane");
+        el.removeAttribute("data-agy-idle-scroller");
+        el.removeAttribute("data-agy-idle-footer");
+        el.removeAttribute("data-agy-idle-card");
+        el.removeAttribute("data-agy-idle-body");
+      });
+    } catch (e) {}
     const idsToRemove = [
       "agy-control-container",
       "agy-toggle-prompt-btn",
       "agy-debug-bar",
       "agy-dock-mini-btn",
       "agy-mobile-enhancements",
+      "agy-idle-bg-style",
       "agy-big-close-image-btn",
       "agy-top-close-image-btn",
       "agy-proof-border",
@@ -88,6 +102,7 @@
     targetOption: 0, // 0 = Auto (Max - 1)
     multiProjectPatrol: true,
     autoReturnHome: true,
+    idleYellowBg: true,
   };
 
   let countdownTimer   = null;
@@ -1322,6 +1337,9 @@
     await smartDelay(400);
 
     // 2. Force click Submit
+    if (typeof window.__AGY_MARK_RUNNING === "function") {
+      window.__AGY_MARK_RUNNING(1600);
+    }
     updateBar("Dang click Submit...", "warning", 3000);
     forceClick(submitBtn);
 
@@ -1700,6 +1718,9 @@
       });
       if (isOnlyOurUI) return;
       scanAndProcess();
+      if (typeof window.__AGY_CHECK_IDLE_BG === "function") {
+        window.__AGY_CHECK_IDLE_BG();
+      }
     });
 
     window.__AGY_OBSERVER.observe(document.body, {
@@ -2095,6 +2116,9 @@
           box.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
         }
 
+        if (typeof window.__AGY_MARK_RUNNING === "function") {
+          window.__AGY_MARK_RUNNING(1400);
+        }
         triggerPromptSubmit(box);
       }
 
@@ -2215,6 +2239,9 @@
         const box = findRealChatInputBox();
         const sendBtn = findPromptSendButton(box);
 
+        if (typeof window.__AGY_MARK_RUNNING === "function") {
+          window.__AGY_MARK_RUNNING(1400);
+        }
         if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute("aria-disabled") !== "true") {
           forceClick(sendBtn);
         }
@@ -3326,6 +3353,7 @@
                 activeChat,
                 sidebarCount: items.length,
                 hasApprovalDialog,
+                idlePromptWaiting: document.body?.classList.contains("agy-idle-light") || document.body?.classList.contains("agy-idle-dark"),
                 sidebarPreview: items.slice(0, 20).map((i) => ({
                   cascadeId: i.cascadeId,
                   title: i.title,
@@ -3436,6 +3464,260 @@
         setInterval(liftPromptCard, 1000);
         liftPromptCard();
       }
+
+      // 5. Idle Prompt Background Monitor: tints active chat window warm yellow when AI stops & awaits prompt
+      function initIdleBackgroundMonitor() {
+        const idleStyleId = "agy-idle-bg-style";
+        if (!document.getElementById(idleStyleId)) {
+          const st = document.createElement("style");
+          st.id = idleStyleId;
+          st.textContent = `
+            body.agy-idle-light [data-agy-idle-pane="1"],
+            body.agy-idle-light [data-agy-idle-scroller="1"],
+            body.agy-idle-light [data-agy-idle-footer="1"],
+            body.agy-idle-light[data-agy-idle-body="1"] {
+              background-color: #FEF5B3 !important;
+              transition: background-color 0.35s ease !important;
+            }
+            body.agy-idle-dark [data-agy-idle-pane="1"],
+            body.agy-idle-dark [data-agy-idle-scroller="1"],
+            body.agy-idle-dark [data-agy-idle-footer="1"],
+            body.agy-idle-dark[data-agy-idle-body="1"] {
+              background-color: #2B240E !important;
+              transition: background-color 0.35s ease !important;
+            }
+            body.agy-idle-light [data-agy-idle-card="1"] {
+              background-color: rgba(255, 255, 255, 0.96) !important;
+              box-shadow: 0 0 0 2px rgba(234, 179, 8, 0.6) !important;
+            }
+            body.agy-idle-dark [data-agy-idle-card="1"] {
+              box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.45) !important;
+            }
+          `;
+          document.head.appendChild(st);
+        }
+
+        let cachedIdleYellowBg = true;
+        getSettings().then((s) => {
+          cachedIdleYellowBg = s.idleYellowBg !== false;
+          updateIdlePromptBackground();
+        });
+
+        try {
+          chrome.storage.onChanged.addListener((changes, area) => {
+            if (!isCurrentInstance() || area !== "sync") return;
+            if (changes.idleYellowBg !== undefined) {
+              cachedIdleYellowBg = changes.idleYellowBg.newValue !== false;
+              updateIdlePromptBackground();
+            }
+          });
+        } catch (e) {}
+
+        function detectDarkTheme() {
+          try {
+            const color = getComputedStyle(document.body).color || "";
+            const m = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+            if (m) {
+              const lum = Number(m[1]) * 0.299 + Number(m[2]) * 0.587 + Number(m[3]) * 0.114;
+              return lum >= 128;
+            }
+          } catch (e) {}
+          return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+        }
+
+        function findMainChatPane() {
+          const sc = findChatScroller();
+          if (!sc) return null;
+          let cur = sc;
+          while (cur.parentElement && cur.parentElement !== document.body && cur.parentElement !== document.documentElement) {
+            const p = cur.parentElement;
+            if (p.querySelector('[data-testid="conversation-list-sidebar"], nav[aria-label="Sidebar"], [role="navigation"][aria-label="Sidebar"]')) {
+              break;
+            }
+            cur = p;
+          }
+          return cur;
+        }
+
+        let idleCandidateSince = 0;
+        let manualForceRunningUntil = 0;
+
+        function setAttrIfNeeded(el, attr) {
+          document.querySelectorAll(`[${attr}]`).forEach((oldEl) => {
+            if (oldEl !== el) oldEl.removeAttribute(attr);
+          });
+          if (el && el.getAttribute(attr) !== "1") {
+            el.setAttribute(attr, "1");
+          }
+        }
+
+        function clearIdleTags() {
+          document.body.classList.remove("agy-idle-light", "agy-idle-dark");
+          setAttrIfNeeded(null, "data-agy-idle-pane");
+          setAttrIfNeeded(null, "data-agy-idle-scroller");
+          setAttrIfNeeded(null, "data-agy-idle-footer");
+          setAttrIfNeeded(null, "data-agy-idle-card");
+          setAttrIfNeeded(null, "data-agy-idle-body");
+        }
+
+        function applyIdleYellowState(shouldShow) {
+          if (!shouldShow) {
+            if (document.body.classList.contains("agy-idle-light") || document.body.classList.contains("agy-idle-dark")) {
+              clearIdleTags();
+            }
+            return;
+          }
+
+          const dark = detectDarkTheme();
+          const wantCls = dark ? "agy-idle-dark" : "agy-idle-light";
+          const otherCls = dark ? "agy-idle-light" : "agy-idle-dark";
+          if (document.body.classList.contains(otherCls)) document.body.classList.remove(otherCls);
+          if (!document.body.classList.contains(wantCls)) document.body.classList.add(wantCls);
+
+          const sc = findChatScroller();
+          const pane = findMainChatPane();
+          const promptBox = findRealChatInputBox();
+          const innerCard = promptBox
+            ? (promptBox.closest("form") || promptBox.closest('[class*="rounded-"][class*="border"]') || promptBox.closest('[class*="rounded-"]'))
+            : null;
+          const footer = promptBox ? findPromptContainerToHide(promptBox) : null;
+          const validFooter = footer && footer !== pane && (!innerCard || (footer !== innerCard && !innerCard.contains(footer))) ? footer : null;
+
+          const sidebarEl = document.querySelector('[data-testid="conversation-list-sidebar"], nav[aria-label="Sidebar"], [role="navigation"][aria-label="Sidebar"]');
+          const sidebarVisible = !!(sidebarEl && isElementVisible(sidebarEl) && sidebarEl.getBoundingClientRect().width >= 60);
+
+          setAttrIfNeeded(sc, "data-agy-idle-scroller");
+          setAttrIfNeeded(validFooter, "data-agy-idle-footer");
+          setAttrIfNeeded(innerCard, "data-agy-idle-card");
+          setAttrIfNeeded(sidebarVisible ? null : document.body, "data-agy-idle-body");
+
+          // Also tag intermediate flex shells between sc and pane so bg-background never leaves white gaps
+          const paneTargets = new Set();
+          if (sc && pane) {
+            let walk = sc.parentElement;
+            while (walk && walk !== document.body && walk !== document.documentElement) {
+              paneTargets.add(walk);
+              if (walk === pane) break;
+              walk = walk.parentElement;
+            }
+            paneTargets.add(pane);
+          } else if (pane) {
+            paneTargets.add(pane);
+          }
+          document.querySelectorAll("[data-agy-idle-pane]").forEach((oldEl) => {
+            if (!paneTargets.has(oldEl)) oldEl.removeAttribute("data-agy-idle-pane");
+          });
+          paneTargets.forEach((t) => {
+            if (t && t.getAttribute("data-agy-idle-pane") !== "1") t.setAttribute("data-agy-idle-pane", "1");
+          });
+        }
+
+        function detectIsPromptWaitingIdle() {
+          if (Date.now() < manualForceRunningUntil) return false;
+          if (isProcessing) return false;
+
+          const promptBox = findRealChatInputBox();
+          if (!promptBox) return false;
+
+          // Only tint actual open conversations (skip empty Start Home / Settings screens)
+          const hasOpenChat = window.location.pathname.includes("/c/") || !!getCurrentConversationTitle();
+          if (!hasOpenChat) return false;
+
+          if (findApprovalDialog()) return false;
+
+          const composerRoot = findPromptContainerToHide(promptBox);
+          const stopSelector = 'button[aria-label*="stop" i], button[aria-label*="interrupt" i], button[aria-label*="dừng" i], button[title*="stop" i], button[data-testid*="stop" i]';
+
+          if (composerRoot) {
+            const composerStops = Array.from(composerRoot.querySelectorAll(stopSelector));
+            if (composerStops.some((b) => !b.closest('[id^="agy-"]') && (isPromptHidden || isElementVisible(b)))) {
+              return false;
+            }
+            const rectBtns = Array.from(composerRoot.querySelectorAll("button:has(svg rect)")).filter((b) => {
+              if (b.closest('[id^="agy-"]')) return false;
+              const lbl = (b.getAttribute("aria-label") || b.title || "").toLowerCase();
+              if (/context|model|mic|voice|audio|attach|upload|permission|preset|feedback|plus|add/.test(lbl)) return false;
+              return isPromptHidden || isElementVisible(b);
+            });
+            if (rectBtns.length > 0) return false;
+          }
+
+          const globalStops = Array.from(document.querySelectorAll(stopSelector));
+          for (const b of globalStops) {
+            if (b.closest('[data-testid="conversation-list-sidebar"], nav, aside, [role="navigation"], [id^="agy-"], [role="dialog"]')) continue;
+            if (!isElementVisible(b)) continue;
+            if (b.getBoundingClientRect().top > 70) return false;
+          }
+
+          const selectedRow = document.querySelector('[data-testid="conversation-row-sidebar"][data-selected="true"]');
+          if (selectedRow && selectedRow.querySelector('button[aria-label*="Stop" i], button[aria-label*="Cancel" i], [data-testid*="spinner" i]')) {
+            return false;
+          }
+
+          const progressEls = Array.from((composerRoot || document).querySelectorAll('[role="progressbar"]'));
+          if (progressEls.some((el) => !el.closest('[data-testid="conversation-list-sidebar"], [id^="agy-"]') && isElementVisible(el))) {
+            return false;
+          }
+
+          return true;
+        }
+
+        function markPromptSubmitted(lockMs = 1400) {
+          manualForceRunningUntil = Math.max(manualForceRunningUntil, Date.now() + lockMs);
+          idleCandidateSince = 0;
+          applyIdleYellowState(false);
+        }
+
+        function updateIdlePromptBackground() {
+          if (!isCurrentInstance()) return;
+          if (!cachedIdleYellowBg) {
+            idleCandidateSince = 0;
+            applyIdleYellowState(false);
+            return;
+          }
+          const rawIdle = detectIsPromptWaitingIdle();
+          if (!rawIdle) {
+            idleCandidateSince = 0;
+            applyIdleYellowState(false);
+            return;
+          }
+          const now = Date.now();
+          if (!idleCandidateSince) {
+            idleCandidateSince = now;
+          }
+          if (now - idleCandidateSince >= 450) {
+            applyIdleYellowState(true);
+          }
+        }
+
+        window.__AGY_CHECK_IDLE_BG = updateIdlePromptBackground;
+        window.__AGY_MARK_RUNNING = markPromptSubmitted;
+
+        addSafeListener(document, "keydown", (e) => {
+          if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+            const box = findRealChatInputBox();
+            if (box && (e.target === box || box.contains(e.target))) {
+              if ((box.textContent || box.value || "").trim().length > 0) {
+                markPromptSubmitted(1400);
+              }
+            }
+          }
+        }, true);
+
+        addSafeListener(document, "click", (e) => {
+          const btn = e.target?.closest?.("button");
+          if (!btn || btn.closest('[id^="agy-"]')) return;
+          const aria = (btn.getAttribute("aria-label") || btn.title || "").toLowerCase();
+          if ((aria.includes("send") || aria.includes("submit") || aria.includes("gửi")) && !aria.includes("feedback")) {
+            markPromptSubmitted(1400);
+          }
+        }, true);
+
+        window.__AGY_IDLE_BG_INTERVAL = setInterval(updateIdlePromptBackground, 450);
+        setTimeout(updateIdlePromptBackground, 500);
+      }
+
+      initIdleBackgroundMonitor();
     }
 
     initMobileKeyboardHandler();

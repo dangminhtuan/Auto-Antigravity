@@ -8,6 +8,7 @@ const elDelayDang   = document.getElementById("delay-danger");
 const elTargetOpt   = document.getElementById("target-option");
 const elMultiPatrol = document.getElementById("toggle-multi-patrol");
 const elReturnHome  = document.getElementById("toggle-return-home");
+const elIdleYellow  = document.getElementById("toggle-idle-yellow");
 const elBtnSave     = document.getElementById("btn-save");
 const elBtnStatus   = document.getElementById("btn-status-view");
 const elBtnCopyDom  = document.getElementById("btn-copy-dom");
@@ -27,6 +28,7 @@ async function loadSettings() {
     targetOption: 0, // 0 = Auto (Max - 1)
     multiProjectPatrol: true,
     autoReturnHome: true,
+    idleYellowBg: true,
   });
 
   elEnabled.checked    = settings.enabled;
@@ -35,6 +37,7 @@ async function loadSettings() {
   if (elTargetOpt) elTargetOpt.value = String(settings.targetOption);
   if (elMultiPatrol) elMultiPatrol.checked = !!settings.multiProjectPatrol;
   if (elReturnHome) elReturnHome.checked = !!settings.autoReturnHome;
+  if (elIdleYellow) elIdleYellow.checked = settings.idleYellowBg !== false;
 
   updateStatusBar(settings.enabled);
 }
@@ -60,6 +63,12 @@ elEnabled.addEventListener("change", async () => {
   updateStatusBar(enabled);
 });
 
+if (elIdleYellow) {
+  elIdleYellow.addEventListener("change", async () => {
+    await chrome.storage.sync.set({ idleYellowBg: elIdleYellow.checked });
+  });
+}
+
 // ── Save delay settings ─────────────────────────────────────────────────────
 
 elBtnSave.addEventListener("click", async () => {
@@ -68,12 +77,13 @@ elBtnSave.addEventListener("click", async () => {
   const targetOption       = parseInt(elTargetOpt?.value) || 0;
   const multiProjectPatrol = elMultiPatrol ? elMultiPatrol.checked : true;
   const autoReturnHome     = elReturnHome ? elReturnHome.checked : true;
+  const idleYellowBg       = elIdleYellow ? elIdleYellow.checked : true;
 
   // Sanitize display
   elDelaySafe.value = delaySafe;
   elDelayDang.value = delayDangerous;
 
-  await chrome.storage.sync.set({ delaySafe, delayDangerous, targetOption, multiProjectPatrol, autoReturnHome });
+  await chrome.storage.sync.set({ delaySafe, delayDangerous, targetOption, multiProjectPatrol, autoReturnHome, idleYellowBg });
 
   // Show save confirmation
   elSaveMsg.hidden = false;
