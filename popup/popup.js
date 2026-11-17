@@ -109,10 +109,25 @@ if (elBtnCopyDom) {
 }
 
 
+const elAutoHint    = document.getElementById("auto-choice-hint");
+
 // ── Load & render log ───────────────────────────────────────────────────────
 
 async function loadLog() {
-  const { agy_log = [] } = await chrome.storage.local.get("agy_log");
+  const { agy_log = [], agy_last_auto_choice = null } = await chrome.storage.local.get({
+    agy_log: [],
+    agy_last_auto_choice: null,
+  });
+
+  if (elAutoHint) {
+    if (agy_last_auto_choice && agy_last_auto_choice.option) {
+      const tot = agy_last_auto_choice.total ? ` / ${agy_last_auto_choice.total}` : "";
+      const strat = agy_last_auto_choice.strategy ? ` (${agy_last_auto_choice.strategy})` : "";
+      elAutoHint.textContent = `📌 Auto dang chon: Option ${agy_last_auto_choice.option}${tot}${strat}`;
+    } else {
+      elAutoHint.textContent = "📌 Auto (Max-1) hien dang chon: Option 3 / 4 (chuan 4 lua chon)";
+    }
+  }
 
   if (agy_log.length === 0) {
     elLogList.innerHTML = '<div class="log-empty">Chua co lich su nao.</div>';
@@ -126,9 +141,13 @@ async function loadLog() {
       const preview = (entry.preview || "").trim().replace(/\s+/g, " ");
       const cls     = entry.classification || "dangerous";
       const label   = cls === "safe" ? "✅ AN TOAN" : "⚠️ NGUY HIEM";
+      const optBadge = entry.option
+        ? ` • Opt ${entry.option}${entry.totalOptions ? "/" + entry.totalOptions : ""}`
+        : "";
+      const chatBadge = entry.chatTitle ? ` • ${entry.chatTitle.slice(0, 24)}` : "";
       return `
         <div class="log-item ${cls}">
-          <div class="log-time">${time} — ${label} (${entry.delay}s)</div>
+          <div class="log-time">${time} — ${label} (${entry.delay}s${optBadge}${chatBadge})</div>
           <div class="log-preview" title="${preview.replace(/"/g, '&quot;')}">${preview || "(no preview)"}</div>
         </div>
       `;

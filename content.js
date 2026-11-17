@@ -8,13 +8,18 @@
  */
 
 (() => {
-  const AGY_VERSION = "1.0.24";
-  // ─── Guard: Only run in AGY or Webviews ─────────────────────────────────────
+  const AGY_VERSION = "1.0.25";
+  // ─── Guard: Strictly run ONLY inside Antigravity / AI Studio (never google.com/search) ─
   const currentUrl = window.location.href.toLowerCase();
   const isTop = window.self === window.top;
-  
-  // We only run in the Top Frame (for debug bar) and the specific Antigravity app Iframe.
-  // This prevents background iframes (like accounts.google.com) from running concurrently.
+  const isAntigravityOrigin =
+    currentUrl.includes("antigravity.google") ||
+    currentUrl.includes("aistudio.google") ||
+    currentUrl.includes("antigravity.static.usercontent.goog");
+
+  if (!isAntigravityOrigin) {
+    return;
+  }
   if (!isTop && !currentUrl.includes("antigravity.static.usercontent.goog")) {
     return;
   }
@@ -424,10 +429,22 @@
         const toggleBtn = document.getElementById("agy-toggle-prompt-btn");
         if (toggleBtn) {
           const hidden = !!e.data.hidden;
+          toggleBtn.dataset.hidden = hidden ? "1" : "0";
           toggleBtn.innerHTML = hidden ? "✏️" : "📖";
           toggleBtn.title = hidden ? "Hiện lại ô soạn thảo" : "Ẩn ô nhập để đọc tràn viền";
           toggleBtn.style.color = hidden ? "rgba(56, 189, 248, 0.95)" : "rgba(255, 255, 255, 0.88)";
-          toggleBtn.style.borderColor = hidden ? "rgba(56, 189, 248, 0.45)" : "rgba(255, 255, 255, 0.18)";
+          toggleBtn.style.borderColor = hidden ? "rgba(56, 189, 248, 0.5)" : "rgba(255, 255, 255, 0.18)";
+          toggleBtn.style.background = hidden ? "rgba(56, 189, 248, 0.18)" : "rgba(255, 255, 255, 0.08)";
+        }
+      }
+      if (e.data && e.data.type === "AGY_SEARCH_STATE_V25") {
+        const searchBtn = document.getElementById("agy-dock-search-btn");
+        if (searchBtn) {
+          const isOpen = !!e.data.open;
+          searchBtn.title = isOpen ? "Đóng hộp tìm kiếm dự án (Esc)" : "Mở hộp tìm kiếm / chuyển dự án (Ctrl+K)";
+          searchBtn.style.background = isOpen ? "rgba(56, 189, 248, 0.25)" : "rgba(255, 255, 255, 0.08)";
+          searchBtn.style.color = isOpen ? "#38bdf8" : "#f8fafc";
+          searchBtn.style.borderColor = isOpen ? "rgba(56, 189, 248, 0.55)" : "rgba(255, 255, 255, 0.16)";
         }
       }
     });
@@ -503,12 +520,14 @@
       } catch (e) {}
     }, 1600);
 
-    // Glassmorphism bottom control dock (LED + 🔍 Search + 📖 + u, o, d + → + 📋 + ▾)
+    // Glassmorphism 2-Row Ergonomic Bottom Control Dock
+    // Row 1 (Utilities): [LED] [🔍 Search] [📖/✏️ Prompt] [📋 DOM] [▾ Collapse]
+    // Row 2 (Thumb Quick Actions): [u] [o] [d] [→ Send]
     function initBottomControlDock() {
       if (document.getElementById("agy-dock-row")) return;
       const container = getControlContainer();
 
-      // Mini floating restore button when dock is collapsed
+      // Enlarged floating restore button when dock is collapsed
       let miniBtn = document.getElementById("agy-dock-mini-btn");
       if (!miniBtn) {
         miniBtn = document.createElement("button");
@@ -520,12 +539,12 @@
           bottom: 12px !important;
           right: 14px !important;
           z-index: 2147483647 !important;
-          width: 38px; height: 38px; border-radius: 50%;
+          width: 44px; height: 44px; border-radius: 50%;
           display: none; align-items: center; justify-content: center;
-          background: rgba(15, 23, 42, 0.85);
+          background: rgba(15, 23, 42, 0.88);
           border: 2px solid rgba(56, 189, 248, 0.65);
-          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
-          color: #38bdf8; font-size: 18px; cursor: pointer;
+          box-shadow: 0 4px 18px rgba(0, 0, 0, 0.48);
+          color: #38bdf8; font-size: 20px; cursor: pointer;
           pointer-events: auto; touch-action: manipulation;
           backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
           transition: transform 0.15s ease;
@@ -544,43 +563,48 @@
       const row = document.createElement("div");
       row.id = "agy-dock-row";
       row.style.cssText = `
-        display: flex; align-items: center; gap: 4px;
-        max-width: calc(100vw - 10px);
-        overflow-x: auto; scrollbar-width: none;
+        display: flex; flex-direction: column; align-items: center; gap: 6px;
+        max-width: calc(100vw - 12px);
         pointer-events: auto;
-        background: rgba(15, 23, 42, 0.68);
+        background: rgba(15, 23, 42, 0.74);
         backdrop-filter: blur(16px) saturate(160%);
         -webkit-backdrop-filter: blur(16px) saturate(160%);
         border: 1px solid rgba(255, 255, 255, 0.22);
-        border-radius: 24px;
-        padding: 4px 6px;
-        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+        border-radius: 22px;
+        padding: 6px 10px;
+        box-shadow: 0 8px 26px rgba(0, 0, 0, 0.42);
         user-select: none;
       `;
 
-      // Helper for touch-friendly circular buttons (34px x 34px)
-      function createDockCircleBtn(id, html, title, color, bg, border) {
+      const row1 = document.createElement("div");
+      row1.style.cssText = "display: flex; align-items: center; justify-content: center; gap: 7px;";
+
+      const row2 = document.createElement("div");
+      row2.style.cssText = "display: flex; align-items: center; justify-content: center; gap: 8px;";
+
+      // Helper for large touch-friendly buttons
+      function createDockBtn(id, html, title, color, bg, border, widthPx = 40, heightPx = 40, radiusPx = 20, fontSizePx = 16) {
         const btn = document.createElement("button");
         btn.id = id;
         btn.innerHTML = html;
         btn.title = title;
         btn.style.cssText = `
-          width: 34px; height: 34px; border-radius: 50%;
+          width: ${widthPx}px; height: ${heightPx}px; border-radius: ${radiusPx}px;
           display: flex; align-items: center; justify-content: center;
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-          font-size: 14.5px; font-weight: 700;
+          font-size: ${fontSizePx}px; font-weight: 700;
           color: ${color};
           background: ${bg};
           border: 1px solid ${border};
           cursor: pointer;
-          box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
           touch-action: manipulation;
-          transition: transform 0.12s ease, filter 0.12s ease;
+          transition: transform 0.12s ease, filter 0.12s ease, background 0.15s ease, border-color 0.15s ease;
           padding: 0; flex-shrink: 0;
         `;
         btn.addEventListener("pointerdown", () => {
-          btn.style.transform = "scale(0.88)";
-          btn.style.filter = "brightness(1.2)";
+          btn.style.transform = "scale(0.9)";
+          btn.style.filter = "brightness(1.18)";
         });
         btn.addEventListener("pointerup", () => {
           btn.style.transform = "scale(1)";
@@ -593,19 +617,21 @@
         return btn;
       }
 
+      // ── ROW 1: Utilities (40x40 circular targets) ────────────────────────────
+
       // 0. Live Proof-of-Control LED Status Button
-      const ledBtn = document.createElement("button");
-      ledBtn.id = "agy-bridge-led";
-      ledBtn.title = "Kiểm tra trạng thái AI Bridge & Iframe";
-      ledBtn.innerHTML = `<span style="width:10px;height:10px;border-radius:50%;display:block;background:#ef4444;box-shadow:0 0 8px rgba(239,68,68,0.8);transition:all 0.25s ease;"></span>`;
-      ledBtn.style.cssText = `
-        width: 24px; height: 34px; border-radius: 14px;
-        display: flex; align-items: center; justify-content: center;
-        background: rgba(255, 255, 255, 0.06);
-        border: 1px solid rgba(255, 255, 255, 0.2);
-        cursor: pointer; padding: 0; flex-shrink: 0;
-        touch-action: manipulation; transition: border-color 0.25s ease, transform 0.12s ease;
-      `;
+      const ledBtn = createDockBtn(
+        "agy-bridge-led",
+        `<span style="width:12px;height:12px;border-radius:50%;display:block;background:#ef4444;box-shadow:0 0 8px rgba(239,68,68,0.8);transition:all 0.25s ease;"></span>`,
+        "Kiểm tra trạng thái AI Bridge & Iframe",
+        "#ffffff",
+        "rgba(255, 255, 255, 0.08)",
+        "rgba(255, 255, 255, 0.2)",
+        40,
+        40,
+        20,
+        14
+      );
       addSafeListener(ledBtn, "click", (e) => {
         e.stopPropagation();
         let relayed = false;
@@ -619,135 +645,77 @@
           showProofOfControlBanner({ message: "Kiểm tra kết nối thủ công" });
         }
       });
-      row.appendChild(ledBtn);
+      row1.appendChild(ledBtn);
 
-      // 1. Search Project Button (🔍) - triggers native Search Conversations dialog
-      const searchBtn = createDockCircleBtn(
+      // 1. Search Project Toggle Button (🔍) - opens AND closes fastpick modal
+      const searchBtn = createDockBtn(
         "agy-dock-search-btn",
         "🔍",
-        "Mở ô tìm kiếm Conversations / Dự án mặc định của Antigravity",
-        "#38bdf8",
-        "rgba(56, 189, 248, 0.18)",
-        "rgba(56, 189, 248, 0.45)"
+        "Mở hoặc Đóng hộp tìm kiếm dự án (Ctrl+K)",
+        "#f8fafc",
+        "rgba(255, 255, 255, 0.08)",
+        "rgba(255, 255, 255, 0.16)",
+        40,
+        40,
+        20,
+        17
       );
       addSafeListener(searchBtn, "click", (e) => {
         e.stopPropagation();
-        updateBar("Đang mở tìm kiếm dự án...", "info", 1500);
         document.querySelectorAll("iframe").forEach((ifr) => {
           try {
-            ifr.contentWindow?.postMessage({ type: "AGY_TRIGGER_SEARCH_V22" }, "*");
+            ifr.contentWindow?.postMessage({ type: "AGY_TOGGLE_SEARCH_V25" }, "*");
           } catch (err) {}
         });
       });
-      row.appendChild(searchBtn);
+      row1.appendChild(searchBtn);
 
-      // 2. Reading Mode Toggle Button (📖 / ✏️) - icon only
-      let isPromptHidden = false;
-      const toggleBtn = createDockCircleBtn(
+      // 2. Reading Mode Prompt Toggle Button (📖 / ✏️)
+      const toggleBtn = createDockBtn(
         "agy-toggle-prompt-btn",
         "📖",
         "Ẩn hoặc hiện ô nhập để tối đa không gian đọc",
         "rgba(255, 255, 255, 0.88)",
         "rgba(255, 255, 255, 0.08)",
-        "rgba(255, 255, 255, 0.2)"
+        "rgba(255, 255, 255, 0.18)",
+        40,
+        40,
+        20,
+        17
       );
+      toggleBtn.dataset.hidden = "0";
+      function syncPromptBtnUi(hidden) {
+        toggleBtn.dataset.hidden = hidden ? "1" : "0";
+        toggleBtn.innerHTML = hidden ? "✏️" : "📖";
+        toggleBtn.title = hidden ? "Hiện lại ô soạn thảo" : "Ẩn ô nhập để đọc tràn viền";
+        toggleBtn.style.color = hidden ? "rgba(56, 189, 248, 0.95)" : "rgba(255, 255, 255, 0.88)";
+        toggleBtn.style.borderColor = hidden ? "rgba(56, 189, 248, 0.5)" : "rgba(255, 255, 255, 0.18)";
+        toggleBtn.style.background = hidden ? "rgba(56, 189, 248, 0.18)" : "rgba(255, 255, 255, 0.08)";
+      }
       addSafeListener(toggleBtn, "click", (e) => {
         e.stopPropagation();
-        isPromptHidden = !isPromptHidden;
-        toggleBtn.innerHTML = isPromptHidden ? "✏️" : "📖";
-        toggleBtn.title = isPromptHidden ? "Hiện lại ô soạn thảo" : "Ẩn ô nhập để đọc tràn viền";
-        toggleBtn.style.color = isPromptHidden ? "rgba(56, 189, 248, 0.95)" : "rgba(255, 255, 255, 0.88)";
-        toggleBtn.style.borderColor = isPromptHidden ? "rgba(56, 189, 248, 0.45)" : "rgba(255, 255, 255, 0.18)";
-
+        const nextHidden = toggleBtn.dataset.hidden !== "1";
+        syncPromptBtnUi(nextHidden);
         document.querySelectorAll("iframe").forEach((ifr) => {
           try {
-            ifr.contentWindow?.postMessage({ type: "AGY_TOGGLE_PROMPT", hidden: isPromptHidden }, "*");
+            ifr.contentWindow?.postMessage({ type: "AGY_TOGGLE_PROMPT", hidden: nextHidden }, "*");
           } catch (err) {}
         });
       });
-      row.appendChild(toggleBtn);
+      row1.appendChild(toggleBtn);
 
-      // Subtle Divider
-      const divider = document.createElement("div");
-      divider.style.cssText = "width: 1px; height: 18px; background: rgba(255, 255, 255, 0.2); margin: 0 1px; flex-shrink: 0;";
-      row.appendChild(divider);
-
-      // 3. Quick Action Buttons: u, o, d (lowercase, bold)
-      const shortcuts = [
-        { char: "u", color: "#38bdf8", bg: "rgba(56, 189, 248, 0.18)", border: "rgba(56, 189, 248, 0.45)", label: "Gửi nhanh 'u' (cài APK / update)" },
-        { char: "o", color: "#34d399", bg: "rgba(52, 211, 153, 0.18)", border: "rgba(52, 211, 153, 0.45)", label: "Gửi nhanh 'o' (đồng ý / proceed)" },
-        { char: "d", color: "#fbbf24", bg: "rgba(251, 191, 36, 0.18)", border: "rgba(251, 191, 36, 0.45)", label: "Gửi nhanh 'd' (đã gửi hình, chờ text)" },
-      ];
-
-      shortcuts.forEach(({ char, color, bg, border, label }) => {
-        const btn = createDockCircleBtn(`agy-quick-${char}`, char, label, color, bg, border);
-        btn.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace";
-        btn.style.fontSize = "15.5px";
-
-        addSafeListener(btn, "click", (e) => {
-          e.stopPropagation();
-          updateBar(`Đã gửi '${char}'`, "info", 1500);
-
-          if (isPromptHidden) {
-            isPromptHidden = false;
-            toggleBtn.innerHTML = "📖";
-            toggleBtn.style.color = "rgba(255, 255, 255, 0.88)";
-            toggleBtn.style.borderColor = "rgba(255, 255, 255, 0.18)";
-          }
-
-          document.querySelectorAll("iframe").forEach((ifr) => {
-            try {
-              ifr.contentWindow?.postMessage({ type: "AGY_QUICK_SEND_V20", char: char }, "*");
-            } catch (err) {}
-          });
-        });
-
-        row.appendChild(btn);
-      });
-
-      // 4. Native-style Blue Arrow Send Button (submits current prompt box content as-is)
-      const sendNowBtn = createDockCircleBtn(
-        "agy-quick-submit-btn",
-        `
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;">
-          <line x1="5" y1="12" x2="19" y2="12"></line>
-          <polyline points="12 5 19 12 12 19"></polyline>
-        </svg>
-        `,
-        "Gửi ngay nội dung đang có trong ô nhập (tương đương nút mũi tên xanh gốc)",
-        "#ffffff",
-        "#1a73e8",
-        "rgba(255, 255, 255, 0.35)"
-      );
-      sendNowBtn.style.boxShadow = "0 2px 8px rgba(26, 115, 232, 0.5)";
-
-      addSafeListener(sendNowBtn, "click", (e) => {
-        e.stopPropagation();
-        updateBar("Đang gửi lệnh...", "info", 1500);
-
-        if (isPromptHidden) {
-          isPromptHidden = false;
-          toggleBtn.innerHTML = "📖";
-          toggleBtn.style.color = "rgba(255, 255, 255, 0.88)";
-          toggleBtn.style.borderColor = "rgba(255, 255, 255, 0.18)";
-        }
-
-        document.querySelectorAll("iframe").forEach((ifr) => {
-          try {
-            ifr.contentWindow?.postMessage({ type: "AGY_DIRECT_SUBMIT_V20" }, "*");
-          } catch (err) {}
-        });
-      });
-      row.appendChild(sendNowBtn);
-
-      // 5. Soi & Copy DOM Sidebar Button (📋)
-      const dumpBtn = createDockCircleBtn(
+      // 3. Soi & Copy DOM Sidebar Button (📋)
+      const dumpBtn = createDockBtn(
         "agy-dock-dump-btn",
         "📋",
         "Soi và Copy toàn bộ mã DOM của Sidebar / Danh sách dự án vào Clipboard & Bridge",
         "#f59e0b",
-        "rgba(245, 158, 11, 0.18)",
-        "rgba(245, 158, 11, 0.45)"
+        "rgba(245, 158, 11, 0.16)",
+        "rgba(245, 158, 11, 0.42)",
+        40,
+        40,
+        20,
+        16
       );
       addSafeListener(dumpBtn, "click", (e) => {
         e.stopPropagation();
@@ -758,25 +726,89 @@
           } catch (err) {}
         });
       });
-      row.appendChild(dumpBtn);
+      row1.appendChild(dumpBtn);
 
-      // 6. Collapse Dock Button (▾) - minimizes dock to ⚡ floating button to reveal bottom notifications
-      const collapseBtn = createDockCircleBtn(
+      // 4. Collapse Dock Button (▾)
+      const collapseBtn = createDockBtn(
         "agy-dock-collapse-btn",
         "▾",
         "Thu gọn thanh điều khiển để đọc thông báo dưới đáy",
         "#cbd5e1",
         "rgba(255, 255, 255, 0.08)",
-        "rgba(255, 255, 255, 0.2)"
+        "rgba(255, 255, 255, 0.18)",
+        40,
+        40,
+        20,
+        18
       );
-      collapseBtn.style.fontSize = "17px";
       addSafeListener(collapseBtn, "click", (e) => {
         e.stopPropagation();
         row.style.display = "none";
         miniBtn.style.display = "flex";
         updateBar("Đã thu nhỏ thanh điều khiển thành nút ⚡ ở góc phải", "info", 2000);
       });
-      row.appendChild(collapseBtn);
+      row1.appendChild(collapseBtn);
+
+      // ── ROW 2: Primary Thumb Quick-Send & Submit (46px tall pills) ────────────
+
+      const shortcuts = [
+        { char: "u", w: 50, color: "#38bdf8", bg: "rgba(56, 189, 248, 0.2)", border: "rgba(56, 189, 248, 0.48)", label: "Gửi nhanh 'u' (cài APK / update)" },
+        { char: "o", w: 54, color: "#34d399", bg: "rgba(52, 211, 153, 0.2)", border: "rgba(52, 211, 153, 0.48)", label: "Gửi nhanh 'o' (đồng ý / proceed)" },
+        { char: "d", w: 50, color: "#fbbf24", bg: "rgba(251, 191, 36, 0.2)", border: "rgba(251, 191, 36, 0.48)", label: "Gửi nhanh 'd' (đã gửi hình, chờ text)" },
+      ];
+
+      shortcuts.forEach(({ char, w, color, bg, border, label }) => {
+        const btn = createDockBtn(`agy-quick-${char}`, char, label, color, bg, border, w, 46, 14, 18);
+        btn.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace";
+        addSafeListener(btn, "click", (e) => {
+          e.stopPropagation();
+          updateBar(`Đã gửi '${char}'`, "info", 1500);
+          if (toggleBtn.dataset.hidden === "1") syncPromptBtnUi(false);
+
+          document.querySelectorAll("iframe").forEach((ifr) => {
+            try {
+              ifr.contentWindow?.postMessage({ type: "AGY_QUICK_SEND_V20", char: char }, "*");
+            } catch (err) {}
+          });
+        });
+        row2.appendChild(btn);
+      });
+
+      // Native-style Blue Arrow Send Button (wider 58x46 pill for easy thumb tap)
+      const sendNowBtn = createDockBtn(
+        "agy-quick-submit-btn",
+        `
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" style="display:block;">
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+          <polyline points="12 5 19 12 12 19"></polyline>
+        </svg>
+        `,
+        "Gửi ngay nội dung đang có trong ô nhập (tương đương nút mũi tên xanh gốc)",
+        "#ffffff",
+        "#1a73e8",
+        "rgba(255, 255, 255, 0.35)",
+        58,
+        46,
+        14,
+        16
+      );
+      sendNowBtn.style.boxShadow = "0 3px 10px rgba(26, 115, 232, 0.55)";
+
+      addSafeListener(sendNowBtn, "click", (e) => {
+        e.stopPropagation();
+        updateBar("Đang gửi lệnh...", "info", 1500);
+        if (toggleBtn.dataset.hidden === "1") syncPromptBtnUi(false);
+
+        document.querySelectorAll("iframe").forEach((ifr) => {
+          try {
+            ifr.contentWindow?.postMessage({ type: "AGY_DIRECT_SUBMIT_V20" }, "*");
+          } catch (err) {}
+        });
+      });
+      row2.appendChild(sendNowBtn);
+
+      row.appendChild(row1);
+      row.appendChild(row2);
 
       container.appendChild(row);
       updateBridgeLedUi();
@@ -1137,7 +1169,7 @@
   }
 
   // ─── Countdown Overlay ────────────────────────────────────────────────────────
-  function showCountdown(delay, remaining, classification, previewText, onCancel, onNow, optNumber = 3, strategy = "Ket hop") {
+  function showCountdown(delay, remaining, classification, previewText, onCancel, onNow, optNumber = 3, strategy = "Ket hop", totalOptions = 4) {
     removeCountdown();
     const isSafe = classification === "safe";
 
@@ -1173,7 +1205,7 @@
         ${clean}${clean.length >= 85 ? "…" : ""}
       </div>
       <div style="font-size:12px;color:#e2e8f0;">
-        Tu dong chon <strong style="color:#38bdf8;">Option ${optNumber}</strong> <span style="font-size:10.5px;color:#94a3b8;">(${strategy})</span> va Submit sau
+        Tu dong chon <strong style="color:#38bdf8;">Option ${optNumber}${totalOptions ? "/" + totalOptions : ""}</strong> <span style="font-size:10.5px;color:#94a3b8;">(${strategy})</span> va Submit sau
         <strong id="agy-secs" style="color:#fff;font-size:18px;font-family:monospace;">${remaining}</strong>s
       </div>
       <div style="height:4px;background:rgba(255,255,255,0.1);border-radius:2px;overflow:hidden;">
@@ -1258,13 +1290,15 @@
   }
 
   // ─── Approval Execution ───────────────────────────────────────────────────────
-  async function executeApproval(card, optEl, submitBtn, fullText, settings, dialogKey, optNumber = 3) {
+  async function executeApproval(card, optEl, submitBtn, fullText, settings, dialogKey, optNumber = 3, meta = {}) {
+    const totalOptions = meta.totalOptions || 4;
+    const optLabel = `Option ${optNumber}${totalOptions ? "/" + totalOptions : ""}`;
     // Mark card and buttons as processed immediately so they can never re-trigger
     if (card) processedNodes.add(card);
     if (optEl) processedNodes.add(optEl);
     if (submitBtn) processedNodes.add(submitBtn);
 
-    updateBar(`Dang click Option ${optNumber}...`, "warning", 3000);
+    updateBar(`Dang click ${optLabel}...`, "warning", 3000);
 
     // 1. Force click Option row and its internal targets
     forceClick(optEl);
@@ -1301,7 +1335,21 @@
       await smartDelay(300);
     }
 
-    updateBar(`✓ Da phe duyet (Option ${optNumber})!`, "success", 2500);
+    updateBar(`✓ Da phe duyet (${optLabel})!`, "success", 2500);
+
+    const chatTitle = typeof getCurrentConversationTitle === "function" ? getCurrentConversationTitle() : "";
+    try {
+      await chrome.storage.local.set({
+        agy_last_auto_choice: {
+          option: optNumber,
+          total: totalOptions,
+          strategy: meta.strategy || "Ket hop",
+          text: meta.optionText || "",
+          chatTitle,
+          time: new Date().toISOString(),
+        },
+      });
+    } catch (e) {}
 
     await logEvent({
       time: new Date().toISOString(),
@@ -1309,6 +1357,9 @@
       delay: settings._usedDelay || 0,
       preview: fullText.substring(0, 100),
       option: optNumber,
+      totalOptions,
+      strategy: meta.strategy || "Ket hop",
+      chatTitle,
     });
 
     lastProcessedKey = dialogKey;
@@ -1332,7 +1383,7 @@
         return;
       }
 
-      const { card, optChosen, optNumber, strategy, submitBtn } = dialog;
+      const { card, optChosen, optNumber, optionText, strategy, totalOptions, submitBtn } = dialog;
       const fullText = card.innerText || card.textContent || "";
 
       // Stable dialogKey based on question and command, ignoring dynamic spinners
@@ -1361,7 +1412,7 @@
       settings._usedDelay = delay;
 
       updateBar(
-        `[${classification.toUpperCase()}] Option ${optNumber} sau ${delay}s...`,
+        `[${classification.toUpperCase()}] Option ${optNumber}/${totalOptions || 4} sau ${delay}s...`,
         classification === "safe" ? "success" : "warning",
         (delay + 2) * 1000
       );
@@ -1376,7 +1427,11 @@
         countdownTimer = null;
         activeCountdownTick = null;
         removeCountdown();
-        executeApproval(card, optChosen, submitBtn, fullText, settings, dialogKey, optNumber);
+        executeApproval(card, optChosen, submitBtn, fullText, settings, dialogKey, optNumber, {
+          totalOptions,
+          strategy,
+          optionText,
+        });
       };
 
       showCountdown(
@@ -1393,7 +1448,8 @@
         },
         finishCountdown,
         optNumber,
-        strategy
+        strategy,
+        totalOptions
       );
 
       activeCountdownTick = () => {
@@ -1812,26 +1868,23 @@
           }
           ` : ""}
 
-          /* 3. Normal bottom padding when prompt is visible */
-          body:not(.agy-reading-mode) .overflow-y-auto {
-            padding-bottom: 120px !important;
+          /* 3. Bottom breathing room so 2-row floating dock never hides chat footer */
+          body:not(.agy-reading-mode) .overflow-y-auto:not([contenteditable="true"]):not([role="combobox"]):not([data-testid="conversation-list-sidebar"] *) {
+            padding-bottom: 150px !important;
           }
 
-          /* 4. Reading Mode: 100% full screen, zero waste at bottom */
-          body.agy-reading-mode .overflow-y-auto {
-            padding-bottom: 8px !important;
+          /* 4. Reading Mode: hide ONLY verified prompt composer containers (never Search modal or chat feed) */
+          body.agy-reading-mode .overflow-y-auto:not([contenteditable="true"]):not([role="combobox"]):not([data-testid="conversation-list-sidebar"] *) {
+            padding-bottom: 110px !important;
           }
-          body.agy-reading-mode [role="combobox"],
-          body.agy-reading-mode textarea,
-          body.agy-reading-mode [id*="agentSidePanelInputBox"],
-          body.agy-reading-mode form:has([role="combobox"]),
-          body.agy-reading-mode div:has(> [role="combobox"]),
-          body.agy-reading-mode div:has(> * > [role="combobox"]) {
+          body.agy-reading-mode .agy-hidden-prompt-container,
+          body.agy-reading-mode [data-agy-prompt-hidden="1"] {
             display: none !important;
             height: 0 !important;
             min-height: 0 !important;
             margin: 0 !important;
             padding: 0 !important;
+            overflow: hidden !important;
             opacity: 0 !important;
             pointer-events: none !important;
           }
@@ -1841,30 +1894,93 @@
 
       let isPromptHidden = false;
 
+      function findRealChatInputBox() {
+        const candidates = Array.from(
+          document.querySelectorAll(
+            '[id*="agentSidePanelInputBox" i], [data-lexical-editor="true"][contenteditable="true"], [role="combobox"][contenteditable="true"], [contenteditable="true"][role="textbox"], textarea'
+          )
+        );
+        const filtered = candidates.filter((el) => {
+          if (el.closest('[data-testid="fastpick"], [data-testid="fast-pick-viewport"], [role="dialog"]')) return false;
+          if (el.closest('[role="navigation"], [data-testid="conversation-list-sidebar"], nav, aside, header, [id^="agy-"]')) return false;
+          if (el.tagName === "INPUT" && (el.type === "search" || el.type === "checkbox" || el.type === "radio" || el.type === "hidden")) return false;
+          return true;
+        });
+        if (filtered.length === 0) return null;
+        // Prefer lowest element in viewport (real bottom composer)
+        filtered.sort((a, b) => b.getBoundingClientRect().bottom - a.getBoundingClientRect().bottom);
+        return filtered[0];
+      }
+
+      function findPromptContainerToHide(box) {
+        if (!box) return null;
+        let best = box.closest('[id*="agentSidePanelInputBox" i]') || box.closest("form") || box;
+        let cur = best;
+        const maxH = Math.min(340, Math.max(220, window.innerHeight * 0.45));
+        while (cur && cur.parentElement && cur.parentElement !== document.body && cur.parentElement !== document.documentElement) {
+          const parent = cur.parentElement;
+          if (parent.matches("main, nav, aside, header, [role='dialog']")) break;
+          if (parent.classList.contains("overflow-y-auto")) break;
+          // Stop before climbing into the parent flex column that holds the sibling message feed
+          const hasSiblingFeed = Array.from(parent.querySelectorAll(".overflow-y-auto")).some(
+            (sc) => !cur.contains(sc) && sc !== cur && sc.getBoundingClientRect().height > 100
+          );
+          if (hasSiblingFeed) break;
+          const rect = parent.getBoundingClientRect();
+          if (rect.height > 0 && rect.height >= maxH) break;
+          best = parent;
+          cur = parent;
+        }
+        return best;
+      }
+
+      function findChatScroller() {
+        const scrollers = Array.from(document.querySelectorAll(".overflow-y-auto")).filter((sc) => {
+          if (sc.closest('[data-testid="conversation-list-sidebar"], [data-testid="fastpick"], [role="dialog"], nav, aside')) return false;
+          if (sc.getAttribute("contenteditable") === "true" || sc.getAttribute("role") === "combobox") return false;
+          const r = sc.getBoundingClientRect();
+          return r.width > 180 && r.height > 140;
+        });
+        if (scrollers.length === 0) return null;
+        scrollers.sort((a, b) => {
+          const ar = a.getBoundingClientRect();
+          const br = b.getBoundingClientRect();
+          return br.width * br.height - ar.width * ar.height;
+        });
+        return scrollers[0];
+      }
+
       function applyPromptVisibility() {
         if (isPromptHidden) {
           document.body.classList.add("agy-reading-mode");
+          const box = findRealChatInputBox();
+          const containerToHide = findPromptContainerToHide(box);
+          if (containerToHide) {
+            containerToHide.classList.add("agy-hidden-prompt-container");
+            containerToHide.setAttribute("data-agy-prompt-hidden", "1");
+          }
+          updateBar("📖 Đã ẩn ô soạn thảo — Chế độ đọc rộng", "info", 1500);
         } else {
           document.body.classList.remove("agy-reading-mode");
+          document.querySelectorAll('.agy-hidden-prompt-container, [data-agy-prompt-hidden="1"]').forEach((el) => {
+            el.classList.remove("agy-hidden-prompt-container");
+            el.removeAttribute("data-agy-prompt-hidden");
+            el.style.display = "";
+          });
+          const box = findRealChatInputBox();
+          const containerToShow = findPromptContainerToHide(box);
+          if (containerToShow) {
+            containerToShow.classList.remove("agy-hidden-prompt-container");
+            containerToShow.removeAttribute("data-agy-prompt-hidden");
+            containerToShow.style.display = "";
+            if (isTouch) containerToShow.style.marginBottom = "54px";
+          }
+          updateBar("✏️ Đã hiện lại ô soạn thảo", "info", 1500);
         }
 
-        const box = document.querySelector('[role="combobox"], textarea, input[type="text"]');
-        const card = box?.closest('form') ||
-                     box?.closest('[class*="rounded-"], [class*="border-"]') ||
-                     box?.parentElement?.parentElement;
-        const footer = card?.parentElement || box?.closest('[class*="p-"]');
-
-        if (card) {
-          card.style.display = isPromptHidden ? "none" : "";
-          if (!isPromptHidden && isTouch) card.style.marginBottom = "54px";
-        }
-        if (footer && footer !== document.body) {
-          footer.style.display = isPromptHidden ? "none" : "";
-        }
-
-        const sc = document.querySelector('.overflow-y-auto');
+        const sc = findChatScroller();
         if (sc) {
-          sc.style.paddingBottom = isPromptHidden ? "8px" : "120px";
+          sc.style.paddingBottom = isPromptHidden ? "110px" : "150px";
         }
       }
 
@@ -1888,7 +2004,7 @@
           } catch (err) {}
         }
 
-        const box = document.querySelector('[role="combobox"], [contenteditable="true"], textarea, input[type="text"]');
+        const box = findRealChatInputBox();
         if (!box) return;
 
         box.focus();
@@ -2094,7 +2210,7 @@
           } catch (err) {}
         }
 
-        const box = document.querySelector('[role="combobox"], [contenteditable="true"], textarea, input[type="text"]');
+        const box = findRealChatInputBox();
         const sendBtn = findPromptSendButton(box);
 
         if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute("aria-disabled") !== "true") {
@@ -2110,18 +2226,38 @@
         return (t || "").replace(/\.{2,}|…$/g, "").trim().toLowerCase().substring(0, 15);
       }
 
+      let lastKnownSelectedTitle = "";
+      function isNoiseHeaderLabel(txt) {
+        if (!txt) return true;
+        const lower = txt.trim().toLowerCase();
+        if (lower.length < 2 || lower.length > 90) return true;
+        if (/^(\d+\s*(s|m|h|d|w|mo|y)\b|worked for\b|\d+\s+ago\b)/i.test(lower) || /\bago$/i.test(lower)) return true;
+        if (/^\d+\s+files?\s+changed$/i.test(lower) || /^(files?\s+changed|review\s+changes|accept\s+all|reject\s+all|discard\s+all)$/i.test(lower)) return true;
+        if (/^(\+\d+|-\d+|\d+\s+errors?|\d+\s+warnings?)$/i.test(lower)) return true;
+        return false;
+      }
+
       function getCurrentConversationTitle() {
         // 1. Exact check: selected conversation row inside real sidebar
         const selectedRow = document.querySelector('[data-testid="conversation-row-sidebar"][data-selected="true"]');
         if (selectedRow) {
-          const t = selectedRow.querySelector("a[aria-label]")?.getAttribute("aria-label") ||
-                    selectedRow.querySelector(".truncate")?.textContent?.trim();
-          if (t) return t;
+          const t = (
+            selectedRow.querySelector("a[aria-label]")?.getAttribute("aria-label") ||
+            selectedRow.querySelector(".truncate")?.textContent ||
+            ""
+          ).trim();
+          if (t && !isNoiseHeaderLabel(t)) {
+            lastKnownSelectedTitle = t;
+            return t;
+          }
         }
 
         // 2. Top header bar fallback when prompt box is present
-        const promptBox = document.querySelector('[role="combobox"], textarea');
-        if (!promptBox) return null;
+        const promptBox = findRealChatInputBox();
+        if (!promptBox) {
+          if (!selectedRow) lastKnownSelectedTitle = "";
+          return null;
+        }
 
         const ignoreWords = new Set([
           "antigravity", "/", "inbox", "start conversation", "projects",
@@ -2134,13 +2270,11 @@
         let el;
         while ((el = walker.nextNode())) {
           if (el.children.length > 0) continue;
-          if (el.closest('button, [role="button"], [role="navigation"], [data-testid="conversation-list-sidebar"], [id^="agy-"], nav, aside')) continue;
+          if (el.closest('button, [role="button"], [role="navigation"], [data-testid="conversation-list-sidebar"], [data-testid*="diff" i], [data-testid*="changes" i], [class*="diff" i], [id^="agy-"], nav, aside')) continue;
           const txt = (el.textContent || "").trim();
-          if (txt.length < 2 || txt.length > 90) continue;
+          if (isNoiseHeaderLabel(txt)) continue;
           const lower = txt.toLowerCase();
           if (ignoreWords.has(lower)) continue;
-          // Exclude relative timestamps like "1mo ago", "6d", "4m", "Worked for 2h 30m"
-          if (/^(\d+\s*(s|m|h|d|w|mo|y)\b|worked for\b|\d+\s+ago\b)/i.test(lower) || /\bago$/i.test(lower)) continue;
 
           const rect = el.getBoundingClientRect();
           if (
@@ -2156,9 +2290,13 @@
           }
         }
 
-        if (candidates.length === 0) return null;
+        if (candidates.length === 0) {
+          return lastKnownSelectedTitle || null;
+        }
         candidates.sort((a, b) => b.left - a.left);
-        return candidates[0].text;
+        const winner = candidates[0].text;
+        lastKnownSelectedTitle = winner;
+        return winner;
       }
 
       let lastReportedTitle = "";
@@ -2299,31 +2437,104 @@
       addSafeListener(document, "keydown", () => { lastUserTypeTime = Date.now(); }, true);
       addSafeListener(document, "input", () => { lastUserTypeTime = Date.now(); }, true);
 
+      let lastKnownSearchOpen = false;
+      function isSearchDialogOpen() {
+        const vp = document.querySelector('[data-testid="fast-pick-viewport"][data-open]');
+        if (vp && isElementVisible(vp)) return true;
+        const fp = document.querySelector('[data-testid="fastpick"]');
+        if (fp && isElementVisible(fp)) return true;
+        const inp = document.querySelector('input[data-testid="fastpick-input"]');
+        return !!(inp && isElementVisible(inp));
+      }
+
+      function syncSearchStateToTop(forceVal = null) {
+        const open = forceVal !== null ? !!forceVal : isSearchDialogOpen();
+        lastKnownSearchOpen = open;
+        try {
+          window.top.postMessage({ type: "AGY_SEARCH_STATE_V25", open }, "*");
+        } catch (err) {}
+        return open;
+      }
+
+      function closeSearchDialog() {
+        const escOpts = {
+          key: "Escape",
+          code: "Escape",
+          keyCode: 27,
+          which: 27,
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+        };
+        const inp = document.querySelector('input[data-testid="fastpick-input"]');
+        if (inp) {
+          try { inp.dispatchEvent(new KeyboardEvent("keydown", escOpts)); } catch (e) {}
+        }
+        try { document.dispatchEvent(new KeyboardEvent("keydown", escOpts)); } catch (e) {}
+        try { window.dispatchEvent(new KeyboardEvent("keydown", escOpts)); } catch (e) {}
+
+        const fp = document.querySelector('[data-testid="fastpick"]');
+        const vp = document.querySelector('[data-testid="fast-pick-viewport"][data-open], [data-testid="fast-pick-viewport"]');
+        if (vp && isElementVisible(vp)) {
+          const r = vp.getBoundingClientRect();
+          const bx = r.left + 8;
+          const by = r.top + 8;
+          const hit = document.elementFromPoint(bx, by);
+          const clickTarget = (hit && (!fp || !fp.contains(hit))) ? hit : vp;
+          if (!fp || !fp.contains(clickTarget)) {
+            try {
+              const ev = { bubbles: true, cancelable: true, view: window, clientX: bx, clientY: by, button: 0 };
+              clickTarget.dispatchEvent(new PointerEvent("pointerdown", ev));
+              clickTarget.dispatchEvent(new MouseEvent("mousedown", ev));
+              clickTarget.dispatchEvent(new PointerEvent("pointerup", ev));
+              clickTarget.dispatchEvent(new MouseEvent("mouseup", ev));
+              clickTarget.dispatchEvent(new MouseEvent("click", ev));
+            } catch (e) {}
+          }
+        }
+        setTimeout(() => syncSearchStateToTop(), 80);
+        setTimeout(() => syncSearchStateToTop(), 220);
+        updateBar("🔍 Đã đóng tìm kiếm dự án", "info", 1500);
+        return true;
+      }
+
+      function toggleSearchDialog() {
+        if (isSearchDialogOpen()) {
+          closeSearchDialog();
+          return { open: false, action: "closed" };
+        }
+        const triggered = triggerSearchDialog();
+        setTimeout(() => syncSearchStateToTop(), 100);
+        setTimeout(() => syncSearchStateToTop(), 280);
+        return { open: true, action: "opened", triggered };
+      }
+
       function triggerSearchDialog() {
-        // 1. Try direct visible search icon button in sidebar/header
+        // 1. Try direct visible search icon button in sidebar/header (never click fastpick input itself)
         const directBtns = Array.from(
           document.querySelectorAll(
-            'button[aria-label*="Search" i], button[title*="Search" i], button[aria-label*="Tìm" i], [placeholder*="Search" i]'
+            'button[aria-label*="Search" i], button[title*="Search" i], button[aria-label*="Tìm" i]'
           )
-        ).filter((b) => isElementVisible(b) && !b.closest("#agy-control-container"));
+        ).filter((b) => isElementVisible(b) && !b.closest("#agy-control-container") && !b.closest('[data-testid="fastpick"]'));
 
         if (directBtns.length > 0) {
           forceClick(directBtns[0]);
           try { directBtns[0].focus(); } catch (e) {}
-          updateBar("🔍 Đã mở tìm kiếm Antigravity!", "success", 2000);
+          updateBar("🔍 Đã mở tìm kiếm Antigravity!", "success", 1800);
           return true;
         }
 
         // 2. Try magnifying-glass icon button near top-left header ("Antigravity [sidebar] [search]")
         const topLeftBtns = Array.from(document.querySelectorAll("button, [role='button']")).filter((b) => {
           if (b.id && b.id.startsWith("agy-")) return false;
+          if (b.closest('[data-testid="fastpick"]')) return false;
           const r = b.getBoundingClientRect();
           return r.top >= 4 && r.top <= 68 && r.left >= 70 && r.left <= 320 && r.width >= 18 && r.height >= 18 && !!b.querySelector("svg");
         });
         if (topLeftBtns.length > 0) {
           const candidate = topLeftBtns[topLeftBtns.length - 1];
           forceClick(candidate);
-          updateBar("🔍 Đã bấm nút tìm kiếm Sidebar!", "success", 2000);
+          updateBar("🔍 Đã mở tìm kiếm Sidebar!", "success", 1800);
           return true;
         }
 
@@ -2341,7 +2552,7 @@
         };
         target.dispatchEvent(new KeyboardEvent("keydown", kOpts));
         window.dispatchEvent(new KeyboardEvent("keydown", kOpts));
-        updateBar("🔍 Đã kích hoạt phím tắt tìm kiếm (Ctrl+K)!", "info", 2000);
+        updateBar("🔍 Đã kích hoạt phím tắt tìm kiếm (Ctrl+K)!", "info", 1800);
         return true;
       }
 
@@ -3006,10 +3217,32 @@
           }
 
           case "TRIGGER_SEARCH": {
-            const ok = triggerSearchDialog();
+            const res = args.toggle
+              ? toggleSearchDialog()
+              : (args.close ? { open: false, action: "closed", ok: closeSearchDialog() } : { open: true, action: "opened", ok: triggerSearchDialog() });
             await smartDelay(280);
             const report = buildInspectUiReport();
-            sendBridgeResult(cmd.id, "TRIGGER_SEARCH", ok, { domReport: report });
+            syncSearchStateToTop();
+            sendBridgeResult(cmd.id, "TRIGGER_SEARCH", true, { ...res, isOpenNow: isSearchDialogOpen(), domReport: report });
+            break;
+          }
+
+          case "TOGGLE_SEARCH": {
+            const res = toggleSearchDialog();
+            await smartDelay(280);
+            syncSearchStateToTop();
+            sendBridgeResult(cmd.id, "TOGGLE_SEARCH", true, { ...res, isOpenNow: isSearchDialogOpen() });
+            break;
+          }
+
+          case "TOGGLE_PROMPT": {
+            isPromptHidden = typeof args.hidden === "boolean" ? args.hidden : !isPromptHidden;
+            applyPromptVisibility();
+            try {
+              window.top.postMessage({ type: "AGY_PROMPT_STATE", hidden: isPromptHidden }, "*");
+            } catch (err) {}
+            const stillVisible = !!(findRealChatInputBox() && isElementVisible(findRealChatInputBox()));
+            sendBridgeResult(cmd.id, "TOGGLE_PROMPT", true, { hidden: isPromptHidden, boxStillVisible: stillVisible });
             break;
           }
 
@@ -3061,6 +3294,10 @@
       function sendIframeBridgeHeartbeat() {
         if (!isCurrentInstance()) return;
         const activeChat = getCurrentConversationTitle();
+        const searchOpen = isSearchDialogOpen();
+        if (searchOpen !== lastKnownSearchOpen) {
+          syncSearchStateToTop(searchOpen);
+        }
         const items = collectSidebarItems({ detectBadges: true });
         const hasApprovalDialog = !!findApprovalDialog();
 
@@ -3149,8 +3386,8 @@
         if (e.data && e.data.type === "AGY_SWITCH_CHAT_V21") {
           switchToConversation(e.data.target);
         }
-        if (e.data && e.data.type === "AGY_TRIGGER_SEARCH_V22") {
-          triggerSearchDialog();
+        if (e.data && (e.data.type === "AGY_TOGGLE_SEARCH_V25" || e.data.type === "AGY_TRIGGER_SEARCH_V22")) {
+          toggleSearchDialog();
         }
         if (e.data && e.data.type === "AGY_DUMP_SIDEBAR_REQ") {
           dumpSidebarDom({ copyClipboard: true });
@@ -3177,17 +3414,15 @@
         });
       } catch (err) {}
 
-      // 4. Continuously ensure the prompt card is lifted 54px above Android navigation bar
+      // 4. Continuously ensure the prompt card is lifted above dock / navigation bar
       function liftPromptCard() {
         if (!isCurrentInstance()) return;
         if (!isTouch || isPromptHidden || document.body.classList.contains("agy-reading-mode")) return;
-        const box = document.querySelector('[role="combobox"], textarea, input[type="text"]');
+        const box = findRealChatInputBox();
         if (!box) return;
-        
-        // Find outer prompt card container
-        const card = box.closest('form') ||
-                     box.closest('[class*="rounded-"], [class*="border-"]') ||
-                     box.parentElement?.parentElement;
+
+        // Find outer prompt card container safely without touching Search modal
+        const card = findPromptContainerToHide(box);
 
         if (card && card.style.marginBottom !== "54px") {
           card.style.marginBottom = "54px";
