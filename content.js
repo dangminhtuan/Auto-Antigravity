@@ -8,20 +8,88 @@
  */
 
 (() => {
-  const AGY_VERSION = "1.0.28";
-  // ─── Guard: Strictly run ONLY inside Antigravity / AI Studio (never google.com/search) ─
-  const currentUrl = window.location.href.toLowerCase();
+  const AGY_VERSION = "1.0.29";
+  // ─── Guard: Run on Antigravity / AI Studio top frames and ALL non-noise Antigravity/remote subframes ─
+  const currentUrl = (window.location.href || "").toLowerCase();
   const isTop = window.self === window.top;
-  const isAntigravityOrigin =
+
+  const isNoiseGoogleUrl =
+    currentUrl.includes("accounts.google.") ||
+    currentUrl.includes("ogs.google.") ||
+    currentUrl.includes("apis.google.") ||
+    currentUrl.includes("recaptcha") ||
+    currentUrl.includes("www.google.com/") ||
+    currentUrl.includes("lh3.googleusercontent.");
+
+  if (isNoiseGoogleUrl) {
+    return;
+  }
+
+  let ancestorMatch = false;
+  try {
+    const origins = Array.from(window.location.ancestorOrigins || []).map((o) => String(o).toLowerCase());
+    ancestorMatch = origins.some(
+      (o) => o.includes("antigravity.google") || o.includes("aistudio.google") || o.includes("usercontent.goog")
+    );
+  } catch (e) {}
+
+  const isAntigravityTop =
     currentUrl.includes("antigravity.google") ||
     currentUrl.includes("aistudio.google") ||
     currentUrl.includes("antigravity.static.usercontent.goog");
 
-  if (!isAntigravityOrigin) {
+  const isAntigravitySubframe =
+    !isTop &&
+    (currentUrl.includes("antigravity.static.usercontent.goog") ||
+      currentUrl.includes("usercontent.goog") ||
+      currentUrl.includes("googleusercontent.com") ||
+      currentUrl.includes("antigravity.google") ||
+      currentUrl.includes("aistudio.google") ||
+      currentUrl.includes("vscode-webview.net") ||
+      ((currentUrl.startsWith("about:") || currentUrl.startsWith("blob:")) && ancestorMatch) ||
+      ancestorMatch);
+
+  if (isTop && !isAntigravityTop) {
     return;
   }
-  if (!isTop && !currentUrl.includes("antigravity.static.usercontent.goog")) {
+  if (!isTop && !isAntigravitySubframe) {
     return;
+  }
+
+  window.__AGY_LAST_CHILD_IFRAME_AT = window.__AGY_LAST_CHILD_IFRAME_AT || 0;
+
+  function isChildChatIframeAlive() {
+    return Date.now() - Number(window.__AGY_LAST_CHILD_IFRAME_AT || 0) < 4800;
+  }
+
+  function hasChatDomInCurrentDoc() {
+    try {
+      if (
+        document.querySelector(
+          '[id*="agentSidePanelInputBox" i], [data-lexical-editor="true"], [data-testid="conversation-row-sidebar"], [data-testid="conversation-list-sidebar"], button[aria-label*="Send message" i], button[aria-label*="Gửi tin nhắn" i], [data-agy-prompt-hidden="1"]'
+        )
+      ) {
+        return true;
+      }
+      if (
+        document.querySelector(".overflow-y-auto") &&
+        document.querySelector('[role="combobox"][contenteditable], [contenteditable="true"], [contenteditable="plaintext-only"], textarea')
+      ) {
+        return true;
+      }
+      if (typeof findApprovalDialog === "function" && findApprovalDialog()) {
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  function isChatOwnerActive() {
+    if (!isCurrentInstance()) return false;
+    if (!isTop) {
+      return currentUrl.includes("antigravity.static.usercontent.goog") || hasChatDomInCurrentDoc();
+    }
+    return !isChildChatIframeAlive() && hasChatDomInCurrentDoc();
   }
 
   // ─── Cross-Isolated-World Zero-F5 Teardown ──────────────────────────────────
@@ -55,11 +123,15 @@
     if (window.__AGY_TOP_BRIDGE_INTERVAL) clearInterval(window.__AGY_TOP_BRIDGE_INTERVAL);
     if (window.__AGY_TOP_TICK_INTERVAL) clearInterval(window.__AGY_TOP_TICK_INTERVAL);
     if (window.__AGY_IDLE_BG_INTERVAL) clearInterval(window.__AGY_IDLE_BG_INTERVAL);
+    if (window.__AGY_IMAGE_INTERVAL) clearInterval(window.__AGY_IMAGE_INTERVAL);
+    if (window.__AGY_LIFT_INTERVAL) clearInterval(window.__AGY_LIFT_INTERVAL);
     if (window.__AGY_OBSERVER) window.__AGY_OBSERVER.disconnect();
     try { delete window.__AGY_CHECK_IDLE_BG; } catch (e) {}
     try { delete window.__AGY_MARK_RUNNING; } catch (e) {}
     try { delete window.__AGY_BEFORE_SCAN_REVEAL; } catch (e) {}
     try { delete window.__AGY_AFTER_APPROVAL_RESTORE; } catch (e) {}
+    try { delete window.__AGY_LOCAL_CHAT_ACTION; } catch (e) {}
+    try { delete window.__AGY_EXEC_BRIDGE_CMD_LOCAL; } catch (e) {}
     try {
       document.body?.classList.remove("agy-idle-light", "agy-idle-dark");
       document.querySelectorAll("[data-agy-idle-pane], [data-agy-idle-scroller], [data-agy-idle-footer], [data-agy-idle-card], [data-agy-idle-body]").forEach((el) => {
@@ -258,32 +330,109 @@
   if (isTop) {
     let lastIframeSeenAt = 0;
     let lastBridgeSeenAt = 0;
+    let lastPromptAckAt = 0;
     let latestTelemetry = {};
     let proofBannerTimer = null;
+
+    function buildTopDiagnosticsReport() {
+      const iframesInfo = Array.from(document.querySelectorAll("iframe")).map((ifr, idx) => {
+        const r = ifr.getBoundingClientRect();
+        let sameOriginReadable = false;
+        try {
+          sameOriginReadable = !!(ifr.contentDocument && ifr.contentDocument.body);
+        } catch (e) {}
+        return {
+          index: idx,
+          src: ifr.getAttribute("src") || "(no src)",
+          id: ifr.id || "",
+          name: ifr.name || "",
+          title: ifr.title || "",
+          rect: { top: Math.round(r.top), left: Math.round(r.left), w: Math.round(r.width), h: Math.round(r.height) },
+          sameOriginReadable,
+        };
+      });
+      const inputsInfo = queryDeep('[role="combobox"], [contenteditable="true"], [contenteditable="plaintext-only"], [role="textbox"], textarea, input')
+        .filter((el) => !el.closest('[id^="agy-"]'))
+        .slice(0, 20)
+        .map((el) => {
+          const r = el.getBoundingClientRect();
+          return {
+            tag: el.tagName,
+            id: el.id || "",
+            role: el.getAttribute("role") || "",
+            ce: el.getAttribute("contenteditable") || "",
+            placeholder: el.getAttribute("placeholder") || el.getAttribute("aria-label") || "",
+            rect: { top: Math.round(r.top), left: Math.round(r.left), w: Math.round(r.width), h: Math.round(r.height) },
+          };
+        });
+      const payload = {
+        capturedAt: new Date().toISOString(),
+        extensionVersion: AGY_VERSION,
+        frame: "top-diagnostics",
+        url: window.location.href,
+        title: document.title,
+        hasLocalChatDom: hasChatDomInCurrentDoc(),
+        childIframeAlive: isChildChatIframeAlive(),
+        iframes: iframesInfo,
+        inputsFound: inputsInfo,
+        bodyTextSample: (document.body?.innerText || "").slice(0, 800),
+      };
+      return "=== AGY TOP FRAME DIAGNOSTICS ===\n" + JSON.stringify(payload, null, 2);
+    }
+
+    async function runTopFallbackDiagnostics(bridgeCmdId = null) {
+      const report = buildTopDiagnosticsReport();
+      const copied = await copyTextInTopFrame(report);
+      try {
+        chrome.runtime.sendMessage({
+          type: "AGY_BRIDGE_RESULT",
+          payload: {
+            id: bridgeCmdId || null,
+            cmd: "DUMP_DOM",
+            ok: true,
+            frame: "top",
+            extensionVersion: AGY_VERSION,
+            url: window.location.href,
+            domReport: report,
+          },
+        });
+      } catch (e) {}
+      updateBar(
+        copied ? "✓ Đã copy thông tin Frame & DOM (Top) vào Clipboard & Bridge!" : "✓ Đã gửi thông tin Frame & DOM (Top) về Bridge!",
+        "success",
+        3000
+      );
+    }
 
     function updateBridgeLedUi() {
       const led = document.getElementById("agy-bridge-led");
       const mini = document.getElementById("agy-dock-mini-btn");
       const now = Date.now();
-      const iframeOk = now - lastIframeSeenAt < 4500;
+      const iframeOk = now - lastIframeSeenAt < 4800;
+      const localOk = !iframeOk && hasChatDomInCurrentDoc();
+      const chatOk = iframeOk || localOk;
       const bridgeOk = now - lastBridgeSeenAt < 5500;
 
-      let dotColor = "#ef4444"; // Red: no iframe
+      let dotColor = "#ef4444"; // Red: no chat frame detected
       let glow = "rgba(239, 68, 68, 0.7)";
-      let title = "🔴 Chưa thấy Iframe chat — hãy mở 1 cuộc hội thoại (Bấm để kiểm tra)";
+      let title = "🔴 Chưa thấy Iframe chat hoặc ô chat trực tiếp (Bấm để kiểm tra)";
 
-      if (bridgeOk && iframeOk) {
+      if (bridgeOk && chatOk) {
         dotColor = "#22c55e"; // Green: Full 2-Way AI Bridge
         glow = "rgba(34, 197, 94, 0.85)";
-        title = "🟢 AI Bridge ĐÃ NẮM QUYỀN 100% (PC Bridge + Iframe OK) — Bấm để test!";
-      } else if (iframeOk) {
-        dotColor = "#38bdf8"; // Cyan/Blue: Iframe active Standalone
+        title = iframeOk
+          ? "🟢 AI Bridge ĐÃ NẮM QUYỀN 100% (PC Bridge + Iframe OK) — Bấm để test!"
+          : "🟢 AI Bridge ĐÃ NẮM QUYỀN 100% (PC Bridge + Trang Remote trực tiếp) — Bấm để test!";
+      } else if (chatOk) {
+        dotColor = "#38bdf8"; // Cyan/Blue: Active Standalone
         glow = "rgba(56, 189, 248, 0.75)";
-        title = "🔵 Extension ĐANG NẮM QUYỀN Iframe (Chế độ độc lập) — Bấm để test!";
+        title = iframeOk
+          ? "🔵 Extension ĐANG NẮM QUYỀN Iframe (Chế độ độc lập) — Bấm để test!"
+          : "🔵 Extension ĐANG ĐIỀU KHIỂN TRỰC TIẾP trang Remote — Bấm để test!";
       } else if (bridgeOk) {
-        dotColor = "#f59e0b"; // Amber: Bridge ok, waiting for iframe
+        dotColor = "#f59e0b"; // Amber: Bridge ok, waiting for chat DOM
         glow = "rgba(245, 158, 11, 0.75)";
-        title = "🟡 Bridge PC Online, đang chờ Iframe chat — Bấm để test!";
+        title = "🟡 Bridge PC Online, đang chờ khung chat — Bấm để test!";
       }
 
       if (led) {
@@ -302,7 +451,9 @@
 
     function showProofOfControlBanner(info = {}) {
       const now = Date.now();
-      const iframeOk = info.iframeOk !== undefined ? !!info.iframeOk : (now - lastIframeSeenAt < 4500);
+      const iframeOk = info.iframeOk !== undefined ? !!info.iframeOk : (now - lastIframeSeenAt < 4800);
+      const localOk = !iframeOk && (info.localChatOk !== undefined ? !!info.localChatOk : hasChatDomInCurrentDoc());
+      const chatOk = iframeOk || localOk;
       const bridgeOk = info.bridgeOnline !== undefined ? !!info.bridgeOnline : (now - lastBridgeSeenAt < 5500);
 
       // 1. Full-screen glowing emerald pulse border
@@ -312,7 +463,7 @@
         borderEl.id = "agy-proof-border";
         (document.body || document.documentElement).appendChild(borderEl);
       }
-      const accent = bridgeOk ? "#10b981" : (iframeOk ? "#38bdf8" : "#f59e0b");
+      const accent = bridgeOk ? "#10b981" : (chatOk ? "#38bdf8" : "#f59e0b");
       borderEl.style.cssText = `
         position: fixed !important; inset: 0 !important;
         pointer-events: none !important; z-index: 2147483647 !important;
@@ -335,14 +486,15 @@
         (document.body || document.documentElement).appendChild(banner);
       }
 
-      const headline = bridgeOk && iframeOk
+      const headline = bridgeOk && chatOk
         ? "🤖 XÁC NHẬN: AI BRIDGE ĐANG NẮM QUYỀN 100% TRÌNH DUYỆT"
-        : (iframeOk
-          ? "🔵 EXTENSION ĐANG NẮM QUYỀN IFRAME (CHẾ ĐỘ ĐỘC LẬP)"
+        : (chatOk
+          ? (iframeOk ? "🔵 EXTENSION ĐANG NẮM QUYỀN IFRAME (CHẾ ĐỘ ĐỘC LẬP)" : "🔵 EXTENSION ĐANG NẮM QUYỀN TRANG REMOTE TRỰC TIẾP")
           : "⚠️ EXTENSION ĐÃ CHẠY NHƯNG CHƯA VÀO KHUNG CHAT");
 
       const chatName = info.activeChat || latestTelemetry.activeChat || "(Trang chủ / Chưa mở chat)";
       const sidebarCount = info.sidebarCount ?? latestTelemetry.sidebarCount ?? "?";
+      const frameStatusText = iframeOk ? "Iframe OK ✓" : (localOk ? "Top Direct OK ✓" : `Chưa thấy (${document.querySelectorAll("iframe").length} iframe)`);
       const timeStr = new Date().toLocaleTimeString("vi-VN");
       const customMsg = info.message ? `<div style="margin-top:4px;color:#a7f3d0;font-weight:600;">💬 ${String(info.message).replace(/</g, "&lt;")}</div>` : "";
 
@@ -364,7 +516,7 @@
       banner.innerHTML = `
         <div style="font-weight:800;font-size:13px;color:${accent};letter-spacing:0.2px;">${headline}</div>
         <div style="margin-top:4px;color:#e2e8f0;font-size:12px;">
-          • <b>Iframe:</b> ${iframeOk ? "OK ✓" : "Chưa thấy"} &nbsp;|&nbsp;
+          • <b>Khung:</b> ${frameStatusText} &nbsp;|&nbsp;
           <b>PC Bridge:</b> ${bridgeOk ? "9333 OK ✓" : "Offline"} &nbsp;|&nbsp;
           <b>v${AGY_VERSION}</b>
         </div>
@@ -417,12 +569,16 @@
       }
       if (e.data && e.data.type === "AGY_IFRAME_HEARTBEAT_V22") {
         lastIframeSeenAt = Date.now();
+        window.__AGY_LAST_CHILD_IFRAME_AT = lastIframeSeenAt;
         if (e.data.bridgeOnline) lastBridgeSeenAt = Date.now();
         latestTelemetry = e.data;
         updateBridgeLedUi();
       }
       if (e.data && e.data.type === "AGY_SHOW_PROOF_V22") {
-        if (e.data.iframeOk) lastIframeSeenAt = Date.now();
+        if (e.data.iframeOk) {
+          lastIframeSeenAt = Date.now();
+          window.__AGY_LAST_CHILD_IFRAME_AT = lastIframeSeenAt;
+        }
         if (e.data.bridgeOnline) lastBridgeSeenAt = Date.now();
         updateBridgeLedUi();
         showProofOfControlBanner(e.data);
@@ -443,13 +599,14 @@
         }
       }
       if (e.data && e.data.type === "AGY_PROMPT_STATE") {
+        lastPromptAckAt = Date.now();
         const toggleBtn = document.getElementById("agy-toggle-prompt-btn");
         if (toggleBtn) {
           const hidden = !!e.data.hidden;
           toggleBtn.dataset.hidden = hidden ? "1" : "0";
           toggleBtn.innerHTML = hidden ? "✏️" : "📖";
           toggleBtn.title = hidden ? "Hiện lại ô soạn thảo" : "Ẩn ô nhập để đọc tràn viền";
-          toggleBtn.style.color = hidden ? "rgba(56, 189, 248, 0.95)" : "rgba(255, 255, 255, 0.88)";
+          toggleBtn.style.color = hidden ? "rgba(56, 189, 248, 0.95)" : "rgba(255, 255, 255, 0.9)";
           toggleBtn.style.borderColor = hidden ? "rgba(56, 189, 248, 0.5)" : "rgba(255, 255, 255, 0.18)";
           toggleBtn.style.background = hidden ? "rgba(56, 189, 248, 0.18)" : "rgba(255, 255, 255, 0.08)";
         }
@@ -476,11 +633,14 @@
       });
     }, 900);
 
-    // Top-frame bridge heartbeat + instant command relay to wake throttled iframes
+    // Top-frame bridge heartbeat + instant command relay (or direct local execution when no child chat iframe)
     window.__AGY_TOP_BRIDGE_INTERVAL = setInterval(() => {
       if (!isCurrentInstance()) return;
       try {
-        const iframeAlive = Date.now() - lastIframeSeenAt < 15000 || document.querySelectorAll("iframe").length > 0;
+        const childIframeAlive = isChildChatIframeAlive();
+        const localChatActive = !childIframeAlive && hasChatDomInCurrentDoc();
+        const iframeAlive = childIframeAlive || document.querySelectorAll("iframe").length > 0;
+        const iframeSrcs = Array.from(document.querySelectorAll("iframe")).map((i) => i.getAttribute("src") || "(no-src)").slice(0, 6);
         chrome.runtime.sendMessage(
           {
             type: "AGY_BRIDGE_HEARTBEAT",
@@ -491,6 +651,9 @@
               url: window.location.href,
               title: document.title,
               iframeAlive,
+              childIframeAlive,
+              topChatActive: localChatActive,
+              iframeSrcs,
               timestamp: Date.now(),
             },
           },
@@ -503,16 +666,20 @@
                 for (const cmd of resp.commands) {
                   const wantIframe = (cmd.targetFrame || "iframe") === "iframe";
                   const iframes = Array.from(document.querySelectorAll("iframe"));
-                  if (wantIframe && iframes.length > 0) {
-                    // Relay immediately via postMessage (wakes iframe even if Chrome throttled timers)
+                  if (wantIframe && childIframeAlive && iframes.length > 0) {
                     iframes.forEach((ifr) => {
                       try {
                         ifr.contentWindow?.postMessage({ type: "AGY_BRIDGE_EXEC_V23", cmd }, "*");
                       } catch (err) {}
                     });
+                  } else if (localChatActive && typeof window.__AGY_EXEC_BRIDGE_CMD_LOCAL === "function") {
+                    window.__AGY_EXEC_BRIDGE_CMD_LOCAL(cmd);
+                  } else if (cmd.cmd === "DUMP_DOM" || cmd.cmd === "INSPECT_UI") {
+                    runTopFallbackDiagnostics(cmd.id);
                   } else if (cmd.cmd === "PING_PROOF") {
                     showProofOfControlBanner({
-                      iframeOk: Date.now() - lastIframeSeenAt < 6500,
+                      iframeOk: childIframeAlive,
+                      localChatOk: localChatActive,
                       bridgeOnline: true,
                       message: cmd.args?.message || "Top Frame Pong!",
                     });
@@ -525,7 +692,8 @@
                         frame: "top",
                         url: window.location.href,
                         title: document.title,
-                        iframeAlive: Date.now() - lastIframeSeenAt < 6500,
+                        iframeAlive: childIframeAlive,
+                        topChatActive: localChatActive,
                       },
                     });
                   }
@@ -653,6 +821,10 @@
       );
       addSafeListener(ledBtn, "click", (e) => {
         e.stopPropagation();
+        if (!isChildChatIframeAlive() && hasChatDomInCurrentDoc() && typeof window.__AGY_LOCAL_CHAT_ACTION === "function") {
+          window.__AGY_LOCAL_CHAT_ACTION("PING_PROOF");
+          return;
+        }
         let relayed = false;
         document.querySelectorAll("iframe").forEach((ifr) => {
           try {
@@ -660,7 +832,7 @@
             relayed = true;
           } catch (err) {}
         });
-        if (!relayed || Date.now() - lastIframeSeenAt > 4500) {
+        if (!relayed || !isChildChatIframeAlive()) {
           showProofOfControlBanner({ message: "Kiểm tra kết nối thủ công" });
         }
       });
@@ -681,11 +853,18 @@
       );
       addSafeListener(searchBtn, "click", (e) => {
         e.stopPropagation();
+        if (!isChildChatIframeAlive() && hasChatDomInCurrentDoc() && typeof window.__AGY_LOCAL_CHAT_ACTION === "function") {
+          window.__AGY_LOCAL_CHAT_ACTION("TOGGLE_SEARCH");
+          return;
+        }
         document.querySelectorAll("iframe").forEach((ifr) => {
           try {
             ifr.contentWindow?.postMessage({ type: "AGY_TOGGLE_SEARCH_V25" }, "*");
           } catch (err) {}
         });
+        if (!isChildChatIframeAlive()) {
+          updateBar("⚠️ Chưa kết nối được khung chat để tìm kiếm (thử bấm 📋 soi DOM)", "warning", 2200);
+        }
       });
       row1.appendChild(searchBtn);
 
@@ -714,12 +893,23 @@
       addSafeListener(toggleBtn, "click", (e) => {
         e.stopPropagation();
         const nextHidden = toggleBtn.dataset.hidden !== "1";
+        if (!isChildChatIframeAlive() && hasChatDomInCurrentDoc() && typeof window.__AGY_LOCAL_CHAT_ACTION === "function") {
+          window.__AGY_LOCAL_CHAT_ACTION("TOGGLE_PROMPT", { hidden: nextHidden });
+          return;
+        }
+        const sentAt = Date.now();
         syncPromptBtnUi(nextHidden);
         document.querySelectorAll("iframe").forEach((ifr) => {
           try {
             ifr.contentWindow?.postMessage({ type: "AGY_TOGGLE_PROMPT", hidden: nextHidden }, "*");
           } catch (err) {}
         });
+        setTimeout(() => {
+          if (lastPromptAckAt < sentAt && !isChildChatIframeAlive() && !hasChatDomInCurrentDoc()) {
+            syncPromptBtnUi(false);
+            updateBar("⚠️ Khung chat chưa kết nối hoặc chưa có ô nhập (bấm 📋 soi DOM)!", "warning", 2600);
+          }
+        }, 420);
       });
       row1.appendChild(toggleBtn);
 
@@ -738,6 +928,14 @@
       );
       addSafeListener(dumpBtn, "click", (e) => {
         e.stopPropagation();
+        if (!isChildChatIframeAlive()) {
+          if (hasChatDomInCurrentDoc() && typeof window.__AGY_LOCAL_CHAT_ACTION === "function") {
+            window.__AGY_LOCAL_CHAT_ACTION("DUMP_DOM");
+          } else {
+            runTopFallbackDiagnostics();
+          }
+          return;
+        }
         updateBar("Đang trích xuất DOM Sidebar...", "info", 1500);
         document.querySelectorAll("iframe").forEach((ifr) => {
           try {
@@ -781,6 +979,11 @@
         btn.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace";
         addSafeListener(btn, "click", (e) => {
           e.stopPropagation();
+          if (!isChildChatIframeAlive() && hasChatDomInCurrentDoc() && typeof window.__AGY_LOCAL_CHAT_ACTION === "function") {
+            if (toggleBtn.dataset.hidden === "1") syncPromptBtnUi(false);
+            window.__AGY_LOCAL_CHAT_ACTION("QUICK_SEND", { char });
+            return;
+          }
           updateBar(`Đã gửi '${char}'`, "info", 1500);
           if (toggleBtn.dataset.hidden === "1") syncPromptBtnUi(false);
 
@@ -815,6 +1018,11 @@
 
       addSafeListener(sendNowBtn, "click", (e) => {
         e.stopPropagation();
+        if (!isChildChatIframeAlive() && hasChatDomInCurrentDoc() && typeof window.__AGY_LOCAL_CHAT_ACTION === "function") {
+          if (toggleBtn.dataset.hidden === "1") syncPromptBtnUi(false);
+          window.__AGY_LOCAL_CHAT_ACTION("DIRECT_SUBMIT");
+          return;
+        }
         updateBar("Đang gửi lệnh...", "info", 1500);
         if (toggleBtn.dataset.hidden === "1") syncPromptBtnUi(false);
 
@@ -1395,7 +1603,7 @@
   // ─── Main Scanning Loop ───────────────────────────────────────────────────────
   let isScanning = false;
   async function scanAndProcess() {
-    if (!isCurrentInstance() || isProcessing || isScanning) return;
+    if (!isChatOwnerActive() || isProcessing || isScanning) return;
     isScanning = true;
     try {
       if (typeof window.__AGY_BEFORE_SCAN_REVEAL === "function") {
@@ -1667,6 +1875,7 @@
     }
 
     function checkState() {
+      if (!isChatOwnerActive()) return;
       const modal = findActiveImageModal();
       if (modal) {
         activeModal = modal;
@@ -1694,7 +1903,7 @@
       }
     }
 
-    setInterval(checkState, 400);
+    window.__AGY_IMAGE_INTERVAL = setInterval(checkState, 400);
 
     addSafeListener(document, "click", (e) => {
       if (e.target.tagName === "IMG" || e.target.closest("img, [class*='image']")) {
@@ -1707,25 +1916,19 @@
     checkState();
   }
 
-  // ─── Polling, Mutation, Keyboard — ONLY in the app iframe ────────────────────
-  // isTop frame only renders the debug bar via postMessage.
-  // Scanning, observing, and keyboard handling only run inside the actual iframe.
-  if (!isTop) {
+  // ─── Polling, Mutation, Keyboard — runs in chat iframe OR directly in top on remote URLs ─
+  {
     window.__AGY_INTERVAL = setInterval(scanAndProcess, 600);
 
     window.__AGY_OBSERVER = new MutationObserver((mutations) => {
       const isOnlyOurUI = mutations.every((m) => {
         const node = m.target;
         return (
-          node.id === "agy-debug-bar" ||
-          node.id === "agy-autoapprove-overlay" ||
-          node.id === "agy-control-container" ||
-          node.id === "agy-big-close-image-btn" ||
-          node.id === "agy-top-close-image-btn" ||
-          (node.closest && node.closest("#agy-debug-bar, #agy-autoapprove-overlay, #agy-control-container, #agy-big-close-image-btn, #agy-top-close-image-btn"))
+          (node.id && node.id.startsWith("agy-")) ||
+          (node.closest && node.closest('[id^="agy-"]'))
         );
       });
-      if (isOnlyOurUI) return;
+      if (isOnlyOurUI || !isChatOwnerActive()) return;
       scanAndProcess();
       if (typeof window.__AGY_CHECK_IDLE_BG === "function") {
         window.__AGY_CHECK_IDLE_BG();
@@ -1774,11 +1977,14 @@
 
       // 1. FOCUS: Lift the prompt box (proven v11 logic)
       addSafeListener(document, "focusin", (e) => {
+        if (!isChatOwnerActive()) return;
         const el = e.target;
+        if (!el || el.closest?.('[id^="agy-"]')) return;
         if (
           el.tagName === "TEXTAREA" ||
           el.tagName === "INPUT" ||
           el.getAttribute("contenteditable") === "true" ||
+          el.getAttribute("contenteditable") === "plaintext-only" ||
           el.getAttribute("role") === "textbox" ||
           el.getAttribute("role") === "combobox"
         ) {
@@ -1846,14 +2052,14 @@
         style.textContent = `
           /* 1. Large readable text for mobile (18px) - touch only */
           ${isTouch ? `
-          [class*="prose"], [class*="markdown"], [class*="message"], p, li {
+          [class*="prose"]:not([id^="agy-"] *), [class*="markdown"]:not([id^="agy-"] *), [class*="message"]:not([id^="agy-"] *), p:not([id^="agy-"] *), li:not([id^="agy-"] *) {
             font-size: 18px !important;
             line-height: 1.7 !important;
           }
-          [role="combobox"], textarea, input {
+          [role="combobox"]:not([id^="agy-"] *), textarea:not([id^="agy-"] *), input:not([id^="agy-"] *) {
             font-size: 18px !important;
           }
-          pre, code {
+          pre:not([id^="agy-"] *), code:not([id^="agy-"] *) {
             font-size: 14.5px !important;
           }
 
@@ -1959,20 +2165,24 @@
       }
 
       function findRealChatInputBox() {
-        const candidates = Array.from(
-          document.querySelectorAll(
-            '[id*="agentSidePanelInputBox" i], [data-lexical-editor="true"][contenteditable="true"], [role="combobox"][contenteditable="true"], [contenteditable="true"][role="textbox"], textarea'
-          )
+        const candidates = queryDeep(
+          '[id*="agentSidePanelInputBox" i], [data-lexical-editor="true"], [role="combobox"][contenteditable], [role="textbox"][contenteditable], [contenteditable="true"], [contenteditable="plaintext-only"], textarea, input[type="text"][placeholder*="Ask" i], input[placeholder*="prompt" i], input[placeholder*="mention" i]'
         );
         const filtered = candidates.filter((el) => {
           if (el.closest('[data-testid="fastpick"], [data-testid="fast-pick-viewport"], [role="dialog"]')) return false;
           if (el.closest('[role="navigation"], [data-testid="conversation-list-sidebar"], nav, aside, header, [id^="agy-"]')) return false;
           if (el.tagName === "INPUT" && (el.type === "search" || el.type === "checkbox" || el.type === "radio" || el.type === "hidden")) return false;
+          if (el.parentElement?.closest('[contenteditable="true"], [contenteditable="plaintext-only"]')) return false;
           return true;
         });
         if (filtered.length === 0) return null;
-        // Prefer lowest element in viewport (real bottom composer)
-        filtered.sort((a, b) => b.getBoundingClientRect().bottom - a.getBoundingClientRect().bottom);
+        // Prefer lowest element in viewport (or existing hidden composer box)
+        filtered.sort((a, b) => {
+          const ab = a.getBoundingClientRect().bottom;
+          const bb = b.getBoundingClientRect().bottom;
+          if (bb !== ab) return bb - ab;
+          return (b.closest('[data-agy-prompt-hidden="1"]') ? 1 : 0) - (a.closest('[data-agy-prompt-hidden="1"]') ? 1 : 0);
+        });
         return filtered[0];
       }
 
@@ -2028,17 +2238,31 @@
         if (isPromptHidden) {
           const box = findRealChatInputBox();
           const containerToHide = findPromptContainerToHide(box);
-          if (containerToHide && isApprovalContainerNode(containerToHide)) {
+          if (!box || !containerToHide) {
+            isPromptHidden = false;
+            pausedReadingForApproval = false;
+            document.body.classList.remove("agy-reading-mode");
+            try {
+              window.top.postMessage({ type: "AGY_PROMPT_STATE", hidden: false }, "*");
+            } catch (err) {}
+            updateBar("⚠️ Trang này chưa có ô soạn thảo để ẩn/hiện!", "warning", 2200);
+            return;
+          }
+          if (isApprovalContainerNode(containerToHide)) {
             pausedReadingForApproval = true;
             document.body.classList.remove("agy-reading-mode");
+            try {
+              window.top.postMessage({ type: "AGY_PROMPT_STATE", hidden: false }, "*");
+            } catch (err) {}
             updateBar("⚠️ Đang có hộp thoại duyệt — tạm giữ hiển thị để xử lý!", "warning", 2000);
             return;
           }
           document.body.classList.add("agy-reading-mode");
-          if (containerToHide) {
-            containerToHide.classList.add("agy-hidden-prompt-container");
-            containerToHide.setAttribute("data-agy-prompt-hidden", "1");
-          }
+          containerToHide.classList.add("agy-hidden-prompt-container");
+          containerToHide.setAttribute("data-agy-prompt-hidden", "1");
+          try {
+            window.top.postMessage({ type: "AGY_PROMPT_STATE", hidden: true }, "*");
+          } catch (err) {}
           updateBar("📖 Đã ẩn ô soạn thảo — Chế độ đọc rộng", "info", 1500);
         } else {
           pausedReadingForApproval = false;
@@ -2056,7 +2280,10 @@
             containerToShow.style.display = "";
             if (isTouch) containerToShow.style.marginBottom = "62px";
           }
-          updateBar("✏️ Đã hiện lại ô soạn thảo", "info", 1500);
+          try {
+            window.top.postMessage({ type: "AGY_PROMPT_STATE", hidden: false }, "*");
+          } catch (err) {}
+          updateBar(box ? "✏️ Đã hiện lại ô soạn thảo" : "✏️ Đã tắt chế độ ẩn (chưa thấy ô nhập ở khung này)", "info", 1600);
         }
 
         const sc = findChatScroller();
@@ -3124,7 +3351,7 @@
       }
 
       async function runMultiProjectPatrol() {
-        if (!isCurrentInstance() || isProcessing || isScanning || patrolBusy) return;
+        if (!isChatOwnerActive() || isProcessing || isScanning || patrolBusy) return;
         const now = Date.now();
         if (now - lastPatrolCheckAt < 2200) return;
         lastPatrolCheckAt = now;
@@ -3413,7 +3640,7 @@
 
       let lastBridgeOnline = false;
       function sendIframeBridgeHeartbeat() {
-        if (!isCurrentInstance()) return;
+        if (isTop || !isChatOwnerActive()) return;
         const activeChat = getCurrentConversationTitle();
         const searchOpen = isSearchDialogOpen();
         if (searchOpen !== lastKnownSearchOpen) {
@@ -3481,11 +3708,44 @@
         } catch (err) {}
       }
 
-      window.__AGY_BRIDGE_INTERVAL = setInterval(sendIframeBridgeHeartbeat, 1400);
-      setTimeout(sendIframeBridgeHeartbeat, 500);
+      if (!isTop) {
+        window.__AGY_BRIDGE_INTERVAL = setInterval(sendIframeBridgeHeartbeat, 1400);
+        setTimeout(sendIframeBridgeHeartbeat, 300);
+      }
 
-      // Listen for broadcasts & relayed wakeup/bridge commands from top frame
+      window.__AGY_EXEC_BRIDGE_CMD_LOCAL = (cmd) => executeBridgeCommand(cmd);
+      window.__AGY_LOCAL_CHAT_ACTION = (action, data = {}) => {
+        if (!isCurrentInstance()) return;
+        switch (action) {
+          case "TOGGLE_PROMPT":
+            isPromptHidden = !!data.hidden;
+            pausedReadingForApproval = false;
+            applyPromptVisibility();
+            break;
+          case "QUICK_SEND":
+            handleQuickSend(data.char || "o");
+            break;
+          case "DIRECT_SUBMIT":
+            handleDirectSubmit();
+            break;
+          case "TOGGLE_SEARCH":
+            toggleSearchDialog();
+            break;
+          case "DUMP_DOM":
+            dumpSidebarDom({ copyClipboard: true });
+            break;
+          case "PING_PROOF":
+            sendProofSnapshot(null, "Kiểm tra kết nối trực tiếp (Top Frame)", lastBridgeOnline || true);
+            break;
+          case "ENABLE_STATUS_GROUP":
+            enableStatusGroupView();
+            break;
+        }
+      };
+
+      // Listen for broadcasts & relayed wakeup/bridge commands from top frame (in subframes only)
       addSafeListener(window, "message", (e) => {
+        if (isTop || !isChatOwnerActive()) return;
         if (e.data && e.data.type === "AGY_HEARTBEAT_TICK_V24") {
           flushTickWaiters();
           scanAndProcess();
@@ -3526,7 +3786,7 @@
       // Also listen to popup requests via chrome.runtime.onMessage
       try {
         chrome.runtime.onMessage.addListener((msg) => {
-          if (!isCurrentInstance() || !msg) return;
+          if (!isChatOwnerActive() || !msg) return;
           if (msg.type === "AGY_DUMP_SIDEBAR_REQ") {
             dumpSidebarDom({ copyClipboard: true });
           } else if (msg.type === "AGY_PING_PROOF_REQ") {
@@ -3539,7 +3799,7 @@
 
       // 4. Continuously ensure the prompt card is lifted above dock / navigation bar
       function liftPromptCard() {
-        if (!isCurrentInstance()) return;
+        if (!isChatOwnerActive()) return;
         if (!isTouch || isPromptHidden || document.body.classList.contains("agy-reading-mode")) return;
         const box = findRealChatInputBox();
         if (!box) return;
@@ -3554,7 +3814,7 @@
       }
 
       if (isTouch) {
-        setInterval(liftPromptCard, 1000);
+        window.__AGY_LIFT_INTERVAL = setInterval(liftPromptCard, 1000);
         liftPromptCard();
       }
 
@@ -3713,7 +3973,10 @@
           if (!promptBox) return false;
 
           // Only tint actual open conversations (skip empty Start Home / Settings screens)
-          const hasOpenChat = window.location.pathname.includes("/c/") || !!getCurrentConversationTitle();
+          const hasOpenChat =
+            window.location.pathname.includes("/c/") ||
+            /\/remote\/[0-9a-f-]{8,}/i.test(window.location.pathname) ||
+            !!getCurrentConversationTitle();
           if (!hasOpenChat) return false;
 
           if (findApprovalDialog()) return false;
@@ -3762,7 +4025,11 @@
         }
 
         function updateIdlePromptBackground() {
-          if (!isCurrentInstance()) return;
+          if (!isChatOwnerActive()) {
+            idleCandidateSince = 0;
+            applyIdleYellowState(false);
+            return;
+          }
           if (!cachedIdleYellowBg) {
             idleCandidateSince = 0;
             applyIdleYellowState(false);
