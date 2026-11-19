@@ -9,7 +9,7 @@
  */
 
 (() => {
-  const AGY_VERSION = "2.0.2";
+  const AGY_VERSION = "2.0.3";
   const HANDOFF_CORE = typeof window !== "undefined" ? window.AGY_HANDOFF_CORE : null;
   let hostTabMeta = { url: window.self === window.top ? window.location.href : "", title: window.self === window.top ? document.title : "" };
   // ─── Guard: Run on Antigravity / AI Studio top frames and ALL non-noise Antigravity/remote subframes ─
@@ -1050,19 +1050,20 @@
           const safeProj = String(item.projectLabel || item.subtext || "").replace(/</g, "&lt;");
           const projKey = String(item.projectLabel || item.title || "").trim().toLowerCase();
           const projChats = projectChatCounts.get(projKey) || 0;
+          const projIconGlyph = isProj ? (item.isCloudRemote ? "☁️" : "📁") : "💬";
           const subtitle = isProj
-            ? `${projChats > 0 ? projChats + " đoạn thoại" : "Dự án"} — bấm để xem toàn bộ hội thoại`
-            : (safeProj ? `📁 ${safeProj}` : (item.cascadeId ? `ID: ${item.cascadeId.slice(0, 8)}…` : "Hội thoại"));
+            ? `${projChats > 0 ? projChats + " đoạn thoại" : (item.isCloudRemote ? "Dự án Remote (Cloud)" : "Dự án Local")} — bấm để xem toàn bộ hội thoại`
+            : (safeProj ? `${item.isCloudRemote ? "☁️" : "📁"} ${safeProj}` : (item.cascadeId ? `ID: ${item.cascadeId.slice(0, 8)}…` : "Hội thoại"));
 
           rowEl.innerHTML = `
             <div style="display:flex;align-items:center;gap:9px;min-width:0;flex:1;">
-              <span style="font-size:16px;flex-shrink:0;">${isProj ? "📁" : "💬"}</span>
+              <span style="font-size:16px;flex-shrink:0;">${projIconGlyph}</span>
               <div style="min-width:0;flex:1;">
                 <div style="font-size:13px;font-weight:700;color:#f8fafc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${safeTitle}</div>
                 <div style="font-size:11px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;">${subtitle}</div>
               </div>
             </div>
-            <div style="display:flex;align-items:center;gap:5px;flex-shrink:0;">${badges.join("")}${isProj ? '<span style="color:#38bdf8;font-size:11px;font-weight:700;background:rgba(56,189,248,0.14);padding:2px 6px;border-radius:5px;">Dự án →</span>' : ""}</div>
+            <div style="display:flex;align-items:center;gap:5px;flex-shrink:0;">${badges.join("")}${isProj ? `<span style="color:#38bdf8;font-size:11px;font-weight:700;background:rgba(56,189,248,0.14);padding:2px 6px;border-radius:5px;">${item.isCloudRemote ? "Remote →" : "Dự án →"}</span>` : ""}</div>
           `;
           rowEl.addEventListener("mouseenter", () => {
             smartSearchState.selectedIdx = idx;
@@ -3214,11 +3215,15 @@
         return (t || "").replace(/\.{2,}|…$/g, "").trim().toLowerCase().substring(0, 15);
       }
 
+      let cachedMappings = [];
+      let cachedCatalog = [];
+      let cachedJobs = {};
       let lastKnownSelectedTitle = "";
       function isNoiseHeaderLabel(txt) {
         if (!txt) return true;
         const lower = txt.trim().toLowerCase();
         if (lower.length < 2 || lower.length > 90) return true;
+        if (/^(?:just\s+now|now|today|yesterday|loading\.\.\.)$/i.test(lower)) return true;
         if (/^(\d+\s*(s|m|h|d|w|mo|y)\b|worked for\b|\d+\s+ago\b)/i.test(lower) || /\bago$/i.test(lower)) return true;
         if (/^\d+\s+files?\s+changed$/i.test(lower) || /^(files?\s+changed|review\s+changes|accept\s+all|reject\s+all|discard\s+all)$/i.test(lower)) return true;
         if (/^(\+\d+|-\d+|\d+\s+errors?|\d+\s+warnings?)$/i.test(lower)) return true;
@@ -3240,6 +3245,16 @@
           }
         }
 
+        // 1b. Exact cascadeId lookup against cached catalog
+        const curCid = extractCascadeIdFromUrl();
+        if (curCid && cachedCatalog.length > 0) {
+          const hit = cachedCatalog.find((c) => c && c.cascadeId === curCid && c.title && !isNoiseHeaderLabel(c.title));
+          if (hit) {
+            lastKnownSelectedTitle = hit.title;
+            return hit.title;
+          }
+        }
+
         // 2. Top header bar fallback when prompt box is present
         const promptBox = findRealChatInputBox();
         if (!promptBox) {
@@ -3258,7 +3273,7 @@
         let el;
         while ((el = walker.nextNode())) {
           if (el.children.length > 0) continue;
-          if (el.closest('button, [role="button"], [role="navigation"], [data-testid="conversation-list-sidebar"], [data-testid*="diff" i], [data-testid*="changes" i], [class*="diff" i], [id^="agy-"], nav, aside')) continue;
+          if (el.closest('button, [role="button"], [role="navigation"], [data-testid="conversation-list-sidebar"], [data-testid*="diff" i], [data-testid*="changes" i], [class*="diff" i], [id^="agy-"], [data-agy-ui="1"], .overflow-y-auto, .overflow-y-scroll, nav, aside')) continue;
           const txt = (el.textContent || "").trim();
           if (isNoiseHeaderLabel(txt)) continue;
           const lower = txt.toLowerCase();
@@ -4383,10 +4398,7 @@
         setTimeout(sendIframeBridgeHeartbeat, 300);
       }
 
-      // ─── Smart Search Catalog Scraper, Sweep & Direct Jump (v2.0.0) ───────────
-      let cachedMappings = [];
-      let cachedCatalog = [];
-      let cachedJobs = {};
+      // ─── Smart Search Catalog Scraper, Sweep & Direct Jump (v2.0.3) ───────────
       let lastCatalogSig = "";
       let lastCatalogSyncAt = 0;
       let catalogSweepBusy = false;
@@ -4430,17 +4442,46 @@
         if (selectedRow) {
           const sub = (selectedRow.getAttribute("data-subtext") || "").trim();
           if (sub) return sub;
+          const secId = selectedRow.closest("[data-sidebar-section-id]")?.getAttribute("data-sidebar-section-id") || "";
+          if (secId && !/^status-/i.test(secId)) {
+            const dropHdr = document.querySelector(`[data-sidebar-section-drop-id="${secId}"] button[data-testid="project-header"]`);
+            const lbl = (dropHdr?.getAttribute("data-project-label") || dropHdr?.textContent || "").trim();
+            if (lbl) return lbl;
+          }
           const sec = selectedRow.closest("[data-sidebar-section-id]");
           const hdr = sec?.querySelector('button[data-testid="project-header"]');
           const hdrLabel = (hdr?.getAttribute("data-project-label") || hdr?.textContent || "").trim();
           if (hdrLabel) return hdrLabel;
         }
-        const crumbs = Array.from(document.querySelectorAll("header *, nav *")).filter((el) => {
-          const t = (el.textContent || "").trim();
-          return el.children.length === 0 && t.includes(" / ") && t.length < 120;
+
+        const rawUrl = isTop ? window.location.href : (hostTabMeta.url || window.location.href);
+        if (HANDOFF_CORE) {
+          const info = HANDOFF_CORE.extractRemoteContextFromUrl(rawUrl, "");
+          if (info.projectId) {
+            const dropHdr = document.querySelector(`[data-sidebar-section-drop-id="${info.projectId}"] button[data-testid="project-header"]`);
+            const lbl = (dropHdr?.getAttribute("data-project-label") || dropHdr?.textContent || "").trim();
+            if (lbl) return lbl;
+            const catProj = cachedCatalog.find((c) => c && c.projectId === info.projectId && (c.projectLabel || c.title));
+            if (catProj) return (catProj.projectLabel || catProj.title).trim();
+          }
+          if (info.cascadeId) {
+            const catChat = cachedCatalog.find((c) => c && c.cascadeId === info.cascadeId && c.projectLabel);
+            if (catChat) return catChat.projectLabel.trim();
+          }
+        }
+
+        // Top breadcrumb bar (e.g. "Auto Antigravity / Tự Động Hóa Phê Duyệt") outside scrollers
+        const topBreadcrumbs = Array.from(document.querySelectorAll("div, nav, header")).filter((el) => {
+          if (el.closest('[role="navigation"][aria-label="Sidebar"], .overflow-y-auto, .overflow-y-scroll, [data-agy-ui="1"], aside')) return false;
+          const r = el.getBoundingClientRect();
+          if (r.top < 2 || r.top > 56 || r.height > 48 || r.width < 40) return false;
+          const t = (el.innerText || "").replace(/\s+/g, " ").trim();
+          return t.includes(" / ") && t.length < 140;
         });
-        if (crumbs.length > 0) {
-          return (crumbs[0].textContent || "").split(" / ")[0].trim();
+        if (topBreadcrumbs.length > 0) {
+          topBreadcrumbs.sort((a, b) => (a.innerText || "").length - (b.innerText || "").length);
+          const firstPart = (topBreadcrumbs[0].innerText || "").split(" / ")[0].trim();
+          if (firstPart && firstPart.length < 70 && !/^antigravity$/i.test(firstPart)) return firstPart;
         }
         return "";
       }
@@ -4451,9 +4492,12 @@
         const base = HANDOFF_CORE
           ? HANDOFF_CORE.extractRemoteContextFromUrl(rawUrl, rawTitle)
           : { url: rawUrl, title: rawTitle, workspaceId: "", projectId: "", cascadeId: "", isRemote: /\/remote\//i.test(rawUrl), suggestedMatch: rawUrl };
+        const activeProj = getCurrentProjectLabel() || base.projectLabel || "";
+        const catProj = activeProj ? cachedCatalog.find((c) => c && c.isProjectHeader && c.projectLabel === activeProj) : null;
         return {
           ...base,
-          projectLabel: getCurrentProjectLabel() || base.projectLabel || "",
+          projectLabel: activeProj,
+          isCloudRemote: Boolean(base.isRemote || (catProj && catProj.isCloudRemote)),
           cascadeId: extractCascadeIdFromUrl() || base.cascadeId || "",
         };
       }
@@ -4461,6 +4505,8 @@
       function collectCatalogSnapshot() {
         if (!isChatOwnerActive()) return [];
         const itemsMap = new Map();
+        const sectionInfoById = new Map();
+        const cloudProjectNames = new Set();
         const now = Date.now();
 
         function upsert(entry) {
@@ -4470,49 +4516,90 @@
             : (entry.cascadeId || ("chat:" + String(entry.title || "").toLowerCase()));
           if (!key || key === "proj:" || key === "chat:") return;
           const prev = itemsMap.get(key) || {};
-          itemsMap.set(key, { ...prev, ...entry, updatedAt: entry.updatedAt || prev.updatedAt || now });
+          const mergedIsCloud = Boolean(entry.isCloudRemote || (entry.projectIcon === "cloud") || (prev.isCloudRemote && entry.projectIcon !== "folder"));
+          itemsMap.set(key, {
+            ...prev,
+            ...entry,
+            projectId: entry.projectId || prev.projectId || "",
+            projectIcon: entry.projectIcon || prev.projectIcon || "",
+            isCloudRemote: mergedIsCloud,
+            updatedAt: entry.updatedAt || prev.updatedAt || now,
+          });
         }
 
-        // 1. Visible Project Headers & Folder Labels (supports all Antigravity sidebar variants)
+        // 1. Visible Project Headers & Cloud/Folder Labels (captures cloud remote vs local folder)
         const sidebarRoot = document.querySelector('[role="navigation"][aria-label="Sidebar"], [data-testid="conversation-list-sidebar"], aside, nav') || document;
         sidebarRoot.querySelectorAll('button[data-testid="project-header"], [data-project-card="true"], [data-project-label]').forEach((btn) => {
           const lbl = (btn.getAttribute("data-project-label") || btn.innerText || btn.textContent || "").replace(/\s+/g, " ").trim();
           if (!lbl || /^(in progress|idle|pinned|conversations|projects)$/i.test(lbl)) return;
+          const rawDropId = btn.closest("[data-sidebar-section-drop-id]")?.getAttribute("data-sidebar-section-drop-id") || "";
+          const cleanProjId = rawDropId && rawDropId !== "main-section-header" && !/^status-/i.test(rawDropId) ? rawDropId : "";
+          const iconType = (btn.getAttribute("data-project-icon") || "").toLowerCase();
+          const isCloudRemote = iconType === "cloud";
+
+          if (cleanProjId) {
+            sectionInfoById.set(cleanProjId, { label: lbl, iconType, isCloudRemote, id: cleanProjId });
+          }
+          if (isCloudRemote) {
+            cloudProjectNames.add(lbl.toLowerCase());
+          }
+
           upsert({
             isProjectHeader: true,
             kind: "project",
             projectLabel: lbl,
             title: lbl,
+            projectId: cleanProjId,
+            projectIcon: iconType,
+            isCloudRemote: isCloudRemote,
             cascadeId: "",
             updatedAt: now,
           });
         });
 
-        sidebarRoot.querySelectorAll('[data-project-glyph="folder"]').forEach((glyph) => {
+        sidebarRoot.querySelectorAll('[data-project-glyph="folder"], [data-project-glyph="cloud"]').forEach((glyph) => {
           if (glyph.closest('[data-testid="conversation-row-sidebar"]')) return;
+          const glyphKind = (glyph.getAttribute("data-project-glyph") || "").toLowerCase();
           const wrap = glyph.closest('button, a, [role="button"], div.flex') || glyph.parentElement;
           const lbl = (wrap?.innerText || wrap?.textContent || "").replace(/\s+/g, " ").trim();
           if (!lbl || lbl.length > 100 || /^(in progress|idle|pinned|conversations|projects)$/i.test(lbl)) return;
+          const isCloudRemote = glyphKind === "cloud";
+          if (isCloudRemote) cloudProjectNames.add(lbl.toLowerCase());
           upsert({
             isProjectHeader: true,
             kind: "project",
             projectLabel: lbl,
             title: lbl,
+            projectIcon: glyphKind,
+            isCloudRemote: isCloudRemote,
             cascadeId: "",
             updatedAt: now,
           });
         });
 
-        // 2. Visible Sidebar Conversation Rows (+ synthesize project entry for every projectLabel seen)
+        // 2. Visible Sidebar Conversation Rows (+ link section UUID & cloud/folder marker)
         const sidebarRows = collectSidebarItems({ detectBadges: true });
         for (const r of sidebarRows) {
-          const proj = (r.projectLabel || r.subtext || "").trim();
+          const rawSecId = r.projectId && !/^status-/i.test(r.projectId) ? r.projectId : "";
+          const secMeta = rawSecId ? sectionInfoById.get(rawSecId) : null;
+          const proj = (r.projectLabel || (secMeta ? secMeta.label : "") || r.subtext || "").trim();
+          const rowHasCloudGlyph = !!r.rowEl?.querySelector('[data-project-glyph="cloud"]');
+          const isCloudRemote = Boolean(
+            (secMeta && secMeta.isCloudRemote) ||
+            rowHasCloudGlyph ||
+            (proj && cloudProjectNames.has(proj.toLowerCase()))
+          );
+          const projIcon = (secMeta && secMeta.iconType) || (isCloudRemote ? "cloud" : "folder");
+
           if (proj) {
             upsert({
               isProjectHeader: true,
               kind: "project",
               projectLabel: proj,
               title: proj,
+              projectId: rawSecId || (secMeta ? secMeta.id : ""),
+              projectIcon: projIcon,
+              isCloudRemote: isCloudRemote,
               cascadeId: "",
               updatedAt: now,
             });
@@ -4524,6 +4611,9 @@
               cascadeId: r.cascadeId,
               title: r.title,
               projectLabel: proj,
+              projectId: rawSecId || (secMeta ? secMeta.id : ""),
+              projectIcon: projIcon,
+              isCloudRemote: isCloudRemote,
               href: r.href || "",
               isSelected: !!r.selected,
               isAttention: !!r.hasAttentionBadge,
@@ -4540,14 +4630,18 @@
           const title = spans[0] || (fp.innerText || "").split("\n")[0]?.trim() || "";
           if (!id || !title) return;
           let proj = "";
-          const folder = fp.querySelector('[data-project-glyph="folder"]')?.parentElement?.textContent || "";
+          const glyphEl = fp.querySelector('[data-project-glyph="folder"], [data-project-glyph="cloud"]');
+          const folder = glyphEl?.parentElement?.textContent || "";
           if (folder) proj = folder.trim();
+          const fpCloud = glyphEl?.getAttribute("data-project-glyph") === "cloud";
           if (proj) {
             upsert({
               isProjectHeader: true,
               kind: "project",
               projectLabel: proj,
               title: proj,
+              projectIcon: fpCloud ? "cloud" : "folder",
+              isCloudRemote: fpCloud,
               cascadeId: "",
               updatedAt: now,
             });
@@ -4558,6 +4652,7 @@
             cascadeId: id,
             title: title.slice(0, 140),
             projectLabel: proj,
+            isCloudRemote: fpCloud,
             updatedAt: now,
           });
         });

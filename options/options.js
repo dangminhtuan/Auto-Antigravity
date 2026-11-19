@@ -101,7 +101,7 @@
     const proj = String(t.projectLabel || "").trim();
     const chat = String(t.chatTitle || "").trim();
     const title = String(t.title || "").trim();
-    const kind = t.isRemote ? "Remote" : (t.isUnifiedShell ? "Desktop" : "Local");
+    const kind = (t.isRemote || t.isCloudRemote) ? "Remote ☁️" : "Local 💻";
     if (proj && chat && proj !== chat) return `[${kind}] ${proj} / ${chat}`;
     return `[${kind}] ${proj || chat || title || t.suggestedMatch || "(Tab Antigravity)"}`;
   }
@@ -133,7 +133,7 @@
     const map = new Map();
     for (let i = 0; i < catalogItems.length; i++) {
       const it = catalogItems[i];
-      if (!it) continue;
+      if (!it || it.isCloudRemote || it.projectIcon === "cloud") continue;
       const proj = String(it.projectLabel || (it.isProjectHeader ? it.title : "") || "").trim();
       if (!proj) continue;
       if (!map.has(proj)) {
@@ -169,15 +169,16 @@
 
     if (remoteCatalogItems.length > 0) {
       const grpSaved = document.createElement("optgroup");
-      grpSaved.label = "🌐 Dự án Remote đã ghé (" + remoteCatalogItems.length + ")";
+      grpSaved.label = "☁️ Dự án Remote / Cloud (" + remoteCatalogItems.length + ")";
       for (const r of remoteCatalogItems) {
         const opt = document.createElement("option");
+        const displayLabel = r.projectLabel || r.label || r.title || r.remoteMatch;
         opt.value = JSON.stringify({
-          remoteMatch: r.remoteMatch || r.url,
-          label: r.label || r.projectLabel || r.title || r.remoteMatch,
-          guessAlias: slugifyAlias(r.projectLabel || r.label || "")
+          remoteMatch: r.remoteMatch || r.projectId || r.url,
+          label: displayLabel,
+          guessAlias: slugifyAlias(displayLabel)
         });
-        opt.textContent = "🌐 " + (r.label || r.remoteMatch) + " (" + String(r.remoteMatch || "").slice(0, 14) + "…)";
+        opt.textContent = "☁️ " + displayLabel + (r.projectId ? " (" + String(r.projectId).slice(0, 8) + "…)" : "");
         grpSaved.appendChild(opt);
       }
       elRemoteSelect.appendChild(grpSaved);
@@ -267,18 +268,19 @@
     const wrap = document.createElement("div");
     wrap.className = "catalog-chip-grid";
     for (const r of remoteCatalogItems) {
+      const displayLabel = r.projectLabel || r.label || r.title || r.remoteMatch;
       const chip = document.createElement("button");
       chip.type = "button";
       chip.className = "catalog-chip";
-      chip.textContent = "🌐 " + (r.label || r.projectLabel || r.remoteMatch);
+      chip.textContent = "☁️ " + displayLabel;
       chip.title = "Match: " + (r.remoteMatch || "") + " — bấm để điền vào cột Remote";
       chip.addEventListener("click", () => {
-        elRemoteMatch.value = r.remoteMatch || r.url || "";
-        elRemotePreview.textContent = "Đã chọn Remote: " + (r.label || r.remoteMatch);
-        if (!elAlias.value.trim() && (r.projectLabel || r.label)) {
-          elAlias.value = slugifyAlias(r.projectLabel || r.label);
+        elRemoteMatch.value = r.remoteMatch || r.projectId || r.url || "";
+        elRemotePreview.textContent = "Đã chọn Remote: " + displayLabel;
+        if (!elAlias.value.trim() && displayLabel) {
+          elAlias.value = slugifyAlias(displayLabel);
         }
-        showBanner("Đã điền cột Remote: " + (r.label || r.remoteMatch), "info");
+        showBanner("Đã điền cột Remote: " + displayLabel, "info");
       });
       wrap.appendChild(chip);
     }
@@ -541,7 +543,7 @@
 
   function exportJson() {
     const payload = {
-      version: "2.0.2",
+      version: "2.0.3",
       exportedAt: new Date().toISOString(),
       mappings: mappings
     };

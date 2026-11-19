@@ -142,7 +142,7 @@ function enqueueCatalogMerge(incomingItems, meta) {
   }
   catalogWriteChain = catalogWriteChain.then(async () => {
     try {
-      const data = await chrome.storage.local.get([STORAGE_KEYS.SEARCH_INDEX]);
+      const data = await chrome.storage.local.get([STORAGE_KEYS.SEARCH_INDEX, STORAGE_KEYS.REMOTE_CATALOG]);
       const existing = Array.isArray(data[STORAGE_KEYS.SEARCH_INDEX]) ? data[STORAGE_KEYS.SEARCH_INDEX] : [];
       const map = new Map();
 
@@ -160,15 +160,23 @@ function enqueueCatalogMerge(incomingItems, meta) {
         const key = item.cascadeId || ("proj:" + String(item.projectLabel || item.title || "").toLowerCase());
         if (!key) continue;
         const prev = map.get(key) || {};
+        const mergedIsCloud = Boolean(
+          item.isCloudRemote ||
+          item.projectIcon === "cloud" ||
+          (prev.isCloudRemote && item.projectIcon !== "folder")
+        );
         map.set(key, {
           ...prev,
           ...item,
           title: item.title || prev.title || "",
           projectLabel: item.projectLabel || prev.projectLabel || "",
+          projectId: item.projectId || prev.projectId || "",
+          projectIcon: item.projectIcon || prev.projectIcon || "",
+          isCloudRemote: mergedIsCloud,
           subtext: item.subtext || prev.subtext || "",
           href: item.href || prev.href || "",
           sourceTabId: (meta && meta.tabId) || item.sourceTabId || prev.sourceTabId || null,
-          sourceIsRemote: Boolean(meta && meta.isRemote),
+          sourceIsRemote: Boolean((meta && meta.isRemote) || mergedIsCloud),
           updatedAt: item.updatedAt || now
         });
       }
@@ -177,9 +185,55 @@ function enqueueCatalogMerge(incomingItems, meta) {
         .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0))
         .slice(0, 2500);
 
+      // Sync Cloud/Remote projects into agy_remote_catalog & prune known local folder projects
+      const localFolderIds = new Set();
+      const cloudProjectItems = [];
+      for (const mItem of merged) {
+        if (mItem.isCloudRemote && (mItem.isProjectHeader || mItem.projectLabel)) {
+          cloudProjectItems.push(mItem);
+        } else if (mItem.projectIcon === "folder" && mItem.projectId) {
+          localFolderIds.add(mItem.projectId.toLowerCase());
+        }
+      }
+
+      const prevRemotes = Array.isArray(data[STORAGE_KEYS.REMOTE_CATALOG]) ? data[STORAGE_KEYS.REMOTE_CATALOG] : [];
+      const remoteMap = new Map();
+      for (const r of prevRemotes) {
+        if (!r || !r.remoteMatch) continue;
+        const rk = String(r.remoteMatch).toLowerCase();
+        const rPid = String(r.projectId || "").toLowerCase();
+        if (localFolderIds.has(rk) || (rPid && localFolderIds.has(rPid))) continue;
+        if (!r.projectLabel && (!r.label || r.label === "Google Antigravity")) continue;
+        remoteMap.set(rk, r);
+      }
+
+      for (const cItem of cloudProjectItems) {
+        const lbl = String(cItem.projectLabel || cItem.title || "").trim();
+        if (!lbl) continue;
+        const matchKey = String(cItem.projectId || lbl).trim();
+        const rk = matchKey.toLowerCase();
+        const prevR = remoteMap.get(rk) || {};
+        remoteMap.set(rk, {
+          ...prevR,
+          remoteMatch: matchKey,
+          label: lbl,
+          projectLabel: lbl,
+          projectId: cItem.projectId || prevR.projectId || "",
+          projectIcon: "cloud",
+          isRemote: true,
+          isCloudRemote: true,
+          updatedAt: cItem.updatedAt || now
+        });
+      }
+
+      const nextRemoteList = Array.from(remoteMap.values())
+        .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0))
+        .slice(0, 100);
+
       await chrome.storage.local.set({
         [STORAGE_KEYS.SEARCH_INDEX]: merged,
-        [STORAGE_KEYS.LOCAL_CATALOG]: merged.filter((x) => !x.sourceIsRemote).slice(0, 2000)
+        [STORAGE_KEYS.LOCAL_CATALOG]: merged.filter((x) => !x.isCloudRemote && !x.sourceIsRemote).slice(0, 2000),
+        [STORAGE_KEYS.REMOTE_CATALOG]: nextRemoteList
       });
       return merged.length;
     } catch (err) {
@@ -241,7 +295,38 @@ async function findBestLocalTab(excludeTabId) {
   return candidates[0];
 }
 
-async function probeTabLiveContext(tab) {
+function enrichCtxWithStoredCatalog(ctx, searchIdx, remoteCat) {
+  if (!ctx) return ctx;
+  const out = { ...ctx };
+  const idx = Array.isArray(searchIdx) ? searchIdx : [];
+  const rem = Array.isArray(remoteCat) ? remoteCat : [];
+
+  if (out.cascadeId) {
+    const chatHit = idx.find((c) => c && c.cascadeId === out.cascadeId);
+    if (chatHit) {
+      if (!out.chatTitle && chatHit.title) out.chatTitle = chatHit.title;
+      if (!out.projectLabel && chatHit.projectLabel) out.projectLabel = chatHit.projectLabel;
+      if (!out.projectId && chatHit.projectId) out.projectId = chatHit.projectId;
+      if (chatHit.isCloudRemote) out.isCloudRemote = true;
+    }
+  }
+
+  if (out.projectId) {
+    const projHit = idx.find((c) => c && c.projectId === out.projectId && (c.projectLabel || c.title))
+      || rem.find((r) => r && (r.projectId === out.projectId || r.remoteMatch === out.projectId));
+    if (projHit) {
+      if (!out.projectLabel) out.projectLabel = String(projHit.projectLabel || projHit.label || projHit.title || "").trim();
+      if (projHit.isCloudRemote) out.isCloudRemote = true;
+    }
+  }
+
+  if (out.isCloudRemote) {
+    out.isRemote = true;
+  }
+  return out;
+}
+
+async function probeTabLiveContext(tab, cachedStores = null) {
   const base = extractCtxFromTab(tab);
   if (!tab || !tab.id) return base;
 
@@ -255,7 +340,7 @@ async function probeTabLiveContext(tab) {
     live = null;
   }
 
-  return {
+  const combined = {
     ...base,
     tabId: tab.id,
     active: Boolean(tab.active),
@@ -266,17 +351,31 @@ async function probeTabLiveContext(tab) {
     projectLabel: (live && live.projectLabel) || base.projectLabel || "",
     chatTitle: (live && live.chatTitle) || "",
     cascadeId: (live && live.cascadeId) || base.cascadeId || "",
-    isRemote: Boolean(base.isRemote || (live && live.isRemote)),
+    isCloudRemote: Boolean(base.isCloudRemote || (live && live.isCloudRemote)),
+    isRemote: Boolean(base.isRemote || (live && live.isRemote) || (live && live.isCloudRemote)),
     isUnifiedShell: Boolean(base.isUnifiedShell || (live && live.isUnifiedShell))
   };
+
+  if (cachedStores) {
+    return enrichCtxWithStoredCatalog(combined, cachedStores.searchIdx, cachedStores.remoteCat);
+  }
+  const data = await chrome.storage.local.get([STORAGE_KEYS.SEARCH_INDEX, STORAGE_KEYS.REMOTE_CATALOG]);
+  return enrichCtxWithStoredCatalog(combined, data[STORAGE_KEYS.SEARCH_INDEX], data[STORAGE_KEYS.REMOTE_CATALOG]);
 }
 
 async function handleGetOpenAgyTabs() {
-  const tabs = await queryAllAntigravityTabs();
-  const enriched = await Promise.all(tabs.map(probeTabLiveContext));
+  const [tabs, stores] = await Promise.all([
+    queryAllAntigravityTabs(),
+    chrome.storage.local.get([STORAGE_KEYS.SEARCH_INDEX, STORAGE_KEYS.REMOTE_CATALOG])
+  ]);
+  const cachedStores = {
+    searchIdx: stores[STORAGE_KEYS.SEARCH_INDEX] || [],
+    remoteCat: stores[STORAGE_KEYS.REMOTE_CATALOG] || []
+  };
+  const enriched = await Promise.all(tabs.map((t) => probeTabLiveContext(t, cachedStores)));
 
   for (const ctx of enriched) {
-    if (ctx.isRemote || ctx.isUnifiedShell || ctx.projectId || ctx.projectLabel) {
+    if ((ctx.isRemote || ctx.isCloudRemote) && (ctx.projectLabel || ctx.projectId || ctx.workspaceId)) {
       await upsertRemoteCatalogEntry(ctx);
     }
   }
@@ -284,8 +383,8 @@ async function handleGetOpenAgyTabs() {
   let remoteTab = null;
   let localTab = null;
 
-  const explicitRemotes = enriched.filter((t) => t.isRemote);
-  const nonRemotes = enriched.filter((t) => !t.isRemote);
+  const explicitRemotes = enriched.filter((t) => t.isRemote || t.isCloudRemote);
+  const nonRemotes = enriched.filter((t) => !t.isRemote && !t.isCloudRemote);
 
   if (explicitRemotes.length > 0 && nonRemotes.length > 0) {
     explicitRemotes.sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0));
@@ -294,8 +393,8 @@ async function handleGetOpenAgyTabs() {
     localTab = nonRemotes[0];
   } else if (enriched.length >= 2) {
     const sorted = [...enriched].sort((a, b) => {
-      const sA = (a.isRemote ? 10 : 0) + (a.projectId ? 5 : 0) + (a.active ? 2 : 0);
-      const sB = (b.isRemote ? 10 : 0) + (b.projectId ? 5 : 0) + (b.active ? 2 : 0);
+      const sA = ((a.isRemote || a.isCloudRemote) ? 10 : 0) + (a.projectId ? 5 : 0) + (a.active ? 2 : 0);
+      const sB = ((b.isRemote || b.isCloudRemote) ? 10 : 0) + (b.projectId ? 5 : 0) + (b.active ? 2 : 0);
       if (sB !== sA) return sB - sA;
       return Number(a.index || 0) - Number(b.index || 0);
     });
@@ -319,13 +418,18 @@ async function handleGetActiveLocalTab(sender) {
   const others = tabs.filter((t) => t && t.id && t.id !== senderTabId);
   if (!others.length) return { ok: true, localTab: null };
 
+  const stores = await chrome.storage.local.get([STORAGE_KEYS.SEARCH_INDEX, STORAGE_KEYS.REMOTE_CATALOG]);
+  const cachedStores = {
+    searchIdx: stores[STORAGE_KEYS.SEARCH_INDEX] || [],
+    remoteCat: stores[STORAGE_KEYS.REMOTE_CATALOG] || []
+  };
   const nonRemote = others.filter((t) => !/\/remote\//i.test(t.url || ""));
   const pool = (nonRemote.length > 0 ? nonRemote : others).slice(0, 4);
-  const probed = await Promise.all(pool.map(probeTabLiveContext));
+  const probed = await Promise.all(pool.map((t) => probeTabLiveContext(t, cachedStores)));
 
   probed.sort((a, b) => {
-    const scoreA = (!a.isRemote ? 20 : 0) + (a.projectLabel ? 10 : 0) + (a.chatTitle ? 5 : 0);
-    const scoreB = (!b.isRemote ? 20 : 0) + (b.projectLabel ? 10 : 0) + (b.chatTitle ? 5 : 0);
+    const scoreA = (!(a.isRemote || a.isCloudRemote) ? 20 : 0) + (a.projectLabel ? 10 : 0) + (a.chatTitle ? 5 : 0);
+    const scoreB = (!(b.isRemote || b.isCloudRemote) ? 20 : 0) + (b.projectLabel ? 10 : 0) + (b.chatTitle ? 5 : 0);
     return scoreB - scoreA;
   });
 
@@ -585,13 +689,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
     }
     const ctx = tab ? extractCtxFromTab(tab) : (msg.remoteContext || {});
-    if (msg.remoteContext && msg.remoteContext.projectLabel && !ctx.projectLabel) {
-      ctx.projectLabel = msg.remoteContext.projectLabel;
+    if (msg.remoteContext) {
+      if (msg.remoteContext.projectLabel && !ctx.projectLabel) ctx.projectLabel = msg.remoteContext.projectLabel;
+      if (msg.remoteContext.isCloudRemote) {
+        ctx.isCloudRemote = true;
+        ctx.isRemote = true;
+      }
     }
     if ((isRemote || ctx.isUnifiedShell) && ctx.url) {
       chrome.storage.local.set({ [STORAGE_KEYS.LAST_REMOTE_CTX]: ctx }).catch(() => {});
     }
-    if (isRemote || ctx.isUnifiedShell || ctx.projectId || ctx.projectLabel) {
+    if ((isRemote || ctx.isCloudRemote) && (ctx.projectLabel || ctx.projectId || ctx.workspaceId)) {
       upsertRemoteCatalogEntry(ctx);
     }
     enqueueCatalogMerge(msg.catalogItems, { tabId, isRemote }).then((totalCount) => {

@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AGY 2.0.2 — Cấu hình Handoff Remote ↔ Local</title>
+  <title>AGY 2.0.3 — Cấu hình Handoff Remote ↔ Local</title>
   <link rel="stylesheet" href="options.css">
 </head>
 <body>
   <div class="page-wrap">
     <header class="topbar">
       <div class="brand">
-        <div class="brand-badge">⚡2.0.2</div>
+        <div class="brand-badge">⚡2.0.3</div>
         <div>
           <h1>Cấu hình liên thông Handoff (Remote ↔ Local)</h1>
           <p class="subtitle">Ghép 1-click giữa 2 tab đang mở hoặc chọn từ danh sách bình đẳng Remote &amp; Local — không lưu token/mật khẩu.</p>
@@ -161,17 +161,17 @@
       <div class="card-head">
         <div>
           <h2>📋 Danh mục Dự án &amp; Nhật ký Handoff</h2>
-          <p id="bottom-pane-desc" class="subtitle">Bấm vào tên dự án bên dưới để điền nhanh vào form ghép đôi.</p>
+          <p id="bottom-pane-desc" class="subtitle">Nhật ký từng lệnh Handoff đã bấm gửi sang Local / trả về Web.</p>
         </div>
         <div class="mini-tabs">
-          <button id="tab-btn-catalog" class="mini-tab active">📁 Dự án Local (<span id="catalog-proj-count">0</span>)</button>
-          <button id="tab-btn-remote" class="mini-tab">🌐 Dự án Remote (<span id="remote-proj-count">0</span>)</button>
-          <button id="tab-btn-jobs" class="mini-tab">⚡ Lịch sử Handoff (<span id="jobs-count">0</span>)</button>
+          <button id="tab-btn-jobs" class="mini-tab active">⚡ Lịch sử Handoff (<span id="jobs-count">0</span>)</button>
+          <button id="tab-btn-remote" class="mini-tab">☁️ Dự án Remote (<span id="remote-proj-count">0</span>)</button>
+          <button id="tab-btn-catalog" class="mini-tab">📁 Dự án Local (<span id="catalog-proj-count">0</span>)</button>
         </div>
       </div>
-      <div id="pane-catalog" class="bottom-pane"></div>
+      <div id="pane-jobs" class="bottom-pane"></div>
       <div id="pane-remote" class="bottom-pane hidden"></div>
-      <div id="pane-jobs" class="bottom-pane hidden"></div>
+      <div id="pane-catalog" class="bottom-pane hidden"></div>
     </section>
   </div>
 
