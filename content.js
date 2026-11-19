@@ -1,14 +1,17 @@
 /**
- * content.js — AGY Auto-Approve v22 (Extension Bridge & Hybrid Selector)
+ * content.js — AGY Auto-Approve v2.0.0 (Handoff, Smart Search & Extension Bridge)
  *
- * Updates in v22:
- * 1. Extension Bridge (2-Way Local Relay + Proof-of-Control Visual Banner & LED).
- * 2. Hybrid Approval Option Selector (Semantic Text Score + Max - 1 + No-Shield).
- * 3. Multi-Project Patrol & 1-Tap Sidebar DOM Dump (📋) + Dock Collapse (▾ / ⚡) + Search (🔍).
+ * Updates in v2.0.0:
+ * 1. Handoff 1-Click Remote <-> Local + Result Return.
+ * 2. Smart Search overlay (Alt+K / Dock button) parallel to native Search.
+ * 3. Fixed Idle Yellow Background false positives while AI is running.
+ * 4. Improved Multi-Project Patrol Home ID fallback (Desktop & Mobile).
  */
 
 (() => {
-  const AGY_VERSION = "1.0.29";
+  const AGY_VERSION = "2.0.0";
+  const HANDOFF_CORE = typeof window !== "undefined" ? window.AGY_HANDOFF_CORE : null;
+  let hostTabMeta = { url: window.self === window.top ? window.location.href : "", title: window.self === window.top ? document.title : "" };
   // ─── Guard: Run on Antigravity / AI Studio top frames and ALL non-noise Antigravity/remote subframes ─
   const currentUrl = (window.location.href || "").toLowerCase();
   const isTop = window.self === window.top;
@@ -125,6 +128,9 @@
     if (window.__AGY_IDLE_BG_INTERVAL) clearInterval(window.__AGY_IDLE_BG_INTERVAL);
     if (window.__AGY_IMAGE_INTERVAL) clearInterval(window.__AGY_IMAGE_INTERVAL);
     if (window.__AGY_LIFT_INTERVAL) clearInterval(window.__AGY_LIFT_INTERVAL);
+    if (window.__AGY_HANDOFF_INTERVAL) clearInterval(window.__AGY_HANDOFF_INTERVAL);
+    if (window.__AGY_CATALOG_INTERVAL) clearInterval(window.__AGY_CATALOG_INTERVAL);
+    if (window.__AGY_HANDOFF_DEBOUNCE) clearTimeout(window.__AGY_HANDOFF_DEBOUNCE);
     if (window.__AGY_OBSERVER) window.__AGY_OBSERVER.disconnect();
     try { delete window.__AGY_CHECK_IDLE_BG; } catch (e) {}
     try { delete window.__AGY_MARK_RUNNING; } catch (e) {}
@@ -132,6 +138,9 @@
     try { delete window.__AGY_AFTER_APPROVAL_RESTORE; } catch (e) {}
     try { delete window.__AGY_LOCAL_CHAT_ACTION; } catch (e) {}
     try { delete window.__AGY_EXEC_BRIDGE_CMD_LOCAL; } catch (e) {}
+    try { delete window.__AGY_SCAN_HANDOFFS; } catch (e) {}
+    try { delete window.__AGY_TOGGLE_SMART_SEARCH; } catch (e) {}
+    try { delete window.__AGY_REFRESH_SMART_SEARCH; } catch (e) {}
     try {
       document.body?.classList.remove("agy-idle-light", "agy-idle-dark");
       document.querySelectorAll("[data-agy-idle-pane], [data-agy-idle-scroller], [data-agy-idle-footer], [data-agy-idle-card], [data-agy-idle-body]").forEach((el) => {
@@ -141,6 +150,7 @@
         el.removeAttribute("data-agy-idle-card");
         el.removeAttribute("data-agy-idle-body");
       });
+      document.querySelectorAll('[data-agy-ui="1"]').forEach((el) => el.remove());
     } catch (e) {}
     const idsToRemove = [
       "agy-control-container",
@@ -153,6 +163,9 @@
       "agy-top-close-image-btn",
       "agy-proof-border",
       "agy-proof-banner",
+      "agy-smart-search-overlay",
+      "agy-smart-search-style",
+      "agy-handoff-style",
     ];
     for (const id of idsToRemove) {
       const el = document.getElementById(id);
@@ -213,6 +226,7 @@
     if (!container) {
       container = document.createElement("div");
       container.id = "agy-control-container";
+      container.setAttribute("data-agy-ui", "1");
       container.style.cssText = `
         position: fixed !important;
         bottom: 8px !important;
@@ -621,14 +635,29 @@
           searchBtn.style.borderColor = isOpen ? "rgba(56, 189, 248, 0.55)" : "rgba(255, 255, 255, 0.16)";
         }
       }
+      if (e.data && e.data.type === "AGY_OPEN_SMART_SEARCH_V2") {
+        if (typeof window.__AGY_TOGGLE_SMART_SEARCH === "function") {
+          window.__AGY_TOGGLE_SMART_SEARCH(true);
+        }
+      }
+      if (e.data && e.data.type === "AGY_SWEEP_DONE_V2") {
+        if (typeof window.__AGY_REFRESH_SMART_SEARCH === "function") {
+          window.__AGY_REFRESH_SMART_SEARCH(e.data.count || 0);
+        }
+      }
     });
 
-    // Continuous wakeup tick from top frame -> iframes (beats Chrome background iframe throttling)
+    // Continuous wakeup tick from top frame -> iframes (beats Chrome background iframe throttling & forwards real topUrl)
     window.__AGY_TOP_TICK_INTERVAL = setInterval(() => {
       if (!isCurrentInstance()) return;
+      const tUrl = window.location.href;
+      const tTitle = document.title;
       document.querySelectorAll("iframe").forEach((ifr) => {
         try {
-          ifr.contentWindow?.postMessage({ type: "AGY_HEARTBEAT_TICK_V24", ts: Date.now() }, "*");
+          ifr.contentWindow?.postMessage(
+            { type: "AGY_HEARTBEAT_TICK_V24", ts: Date.now(), topUrl: tUrl, topTitle: tTitle },
+            "*"
+          );
         } catch (err) {}
       });
     }, 900);
@@ -764,7 +793,7 @@
       `;
 
       const row1 = document.createElement("div");
-      row1.style.cssText = "width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px;";
+      row1.style.cssText = "width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;";
 
       const row2 = document.createElement("div");
       row2.style.cssText = "width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px;";
@@ -867,6 +896,413 @@
         }
       });
       row1.appendChild(searchBtn);
+
+      // 1b. Smart Search AGY 2.0 Toggle Button (🔎) - parallel to native search, searches Projects + Conversations + Regex
+      const smartSearchBtn = createDockBtn(
+        "agy-dock-smart-search-btn",
+        `<span style="position:relative;display:inline-flex;align-items:center;justify-content:center;font-size:19px;">🔎<span style="position:absolute;right:-6px;top:-4px;font-size:10px;line-height:1;">⚡</span></span>`,
+        "Smart Search AGY 2.0 (Alt+K): Tìm không dấu theo Dự án & Hội thoại + Regex",
+        "#67e8f9",
+        "rgba(6, 182, 212, 0.20)",
+        "rgba(34, 211, 238, 0.48)",
+        1,
+        48,
+        16,
+        19
+      );
+
+      let smartSearchState = {
+        open: false,
+        query: "",
+        scope: "all",
+        projectFilter: "",
+        useRegex: false,
+        selectedIdx: 0,
+        catalog: [],
+        results: [],
+        isSweeping: false,
+      };
+
+      function dispatchChatCommandToOwner(type, payload) {
+        if (!isChildChatIframeAlive() && hasChatDomInCurrentDoc() && typeof window.__AGY_LOCAL_CHAT_ACTION === "function") {
+          window.__AGY_LOCAL_CHAT_ACTION(type, payload);
+          return true;
+        }
+        let sent = false;
+        document.querySelectorAll("iframe").forEach((ifr) => {
+          try {
+            ifr.contentWindow?.postMessage({ type: type, ...(payload || {}) }, "*");
+            sent = true;
+          } catch (err) {}
+        });
+        return sent;
+      }
+
+      async function loadSmartSearchCatalog() {
+        try {
+          const data = await chrome.storage.local.get(["agy_search_index", "agy_local_catalog"]);
+          const listA = Array.isArray(data.agy_search_index) ? data.agy_search_index : [];
+          const listB = Array.isArray(data.agy_local_catalog) ? data.agy_local_catalog : [];
+          const map = new Map();
+          for (const it of [...listA, ...listB]) {
+            if (!it) continue;
+            const k = it.cascadeId || ("proj:" + String(it.projectLabel || it.title || "").toLowerCase());
+            if (!map.has(k)) map.set(k, it);
+          }
+          smartSearchState.catalog = Array.from(map.values());
+        } catch (_) {
+          smartSearchState.catalog = [];
+        }
+      }
+
+      function renderSmartSearchResults() {
+        const listEl = document.getElementById("agy-ss-results");
+        const statEl = document.getElementById("agy-ss-stat");
+        const crumbEl = document.getElementById("agy-ss-crumb");
+        const errEl = document.getElementById("agy-ss-error");
+        if (!listEl) return;
+
+        if (crumbEl) {
+          if (smartSearchState.projectFilter) {
+            crumbEl.style.display = "flex";
+            crumbEl.innerHTML = `<span>📁 Đang lọc dự án: <b>${smartSearchState.projectFilter.replace(/</g, "&lt;")}</b></span><button id="agy-ss-clear-proj" style="background:rgba(255,255,255,0.14);border:none;color:#fff;border-radius:4px;padding:2px 7px;font-size:11px;cursor:pointer;font-weight:700;">✕ Bỏ lọc</button>`;
+            const clrBtn = document.getElementById("agy-ss-clear-proj");
+            if (clrBtn) {
+              clrBtn.onclick = () => {
+                smartSearchState.projectFilter = "";
+                smartSearchState.scope = "all";
+                updateSmartSearchScopeButtons();
+                renderSmartSearchResults();
+              };
+            }
+          } else {
+            crumbEl.style.display = "none";
+          }
+        }
+
+        const out = HANDOFF_CORE
+          ? HANDOFF_CORE.searchCatalogItems(smartSearchState.catalog, smartSearchState.query, {
+              scope: smartSearchState.scope,
+              projectFilter: smartSearchState.projectFilter,
+              useRegex: smartSearchState.useRegex,
+              limit: 90,
+            })
+          : { items: smartSearchState.catalog.slice(0, 90), regexError: null };
+
+        if (errEl) {
+          if (out.regexError) {
+            errEl.style.display = "block";
+            errEl.textContent = "Regex chưa hợp lệ: " + out.regexError;
+          } else {
+            errEl.style.display = "none";
+          }
+        }
+
+        smartSearchState.results = out.items || [];
+        if (smartSearchState.selectedIdx >= smartSearchState.results.length) {
+          smartSearchState.selectedIdx = Math.max(0, smartSearchState.results.length - 1);
+        }
+
+        const projCount = new Set(smartSearchState.catalog.map((x) => x.projectLabel || (x.isProjectHeader ? x.title : "")).filter(Boolean)).size;
+        const chatCount = smartSearchState.catalog.filter((x) => !x.isProjectHeader && x.cascadeId).length;
+        if (statEl) {
+          statEl.textContent = `${smartSearchState.results.length} kết quả · ${projCount} dự án · ${chatCount} chat`;
+        }
+
+        if (smartSearchState.results.length === 0) {
+          listEl.innerHTML = `<div style="padding:26px 14px;text-align:center;color:#94a3b8;font-size:12.5px;line-height:1.5;">
+            ${out.regexError ? "Hãy sửa biểu thức Regex để tiếp tục." : "Không tìm thấy mục phù hợp trong Catalog."}
+            <div style="margin-top:8px;font-size:11.5px;color:#64748b;">Mẹo: Bấm <b>🔄 Quét đủ</b> ở góc trên để mở rộng các mục <i>See all</i> trên Sidebar, hoặc thử nút <b>🔍 Search gốc</b>.</div>
+          </div>`;
+          return;
+        }
+
+        listEl.innerHTML = "";
+        smartSearchState.results.forEach((item, idx) => {
+          const isProj = !!(item.isProjectHeader || item.kind === "project");
+          const rowEl = document.createElement("div");
+          rowEl.style.cssText = `
+            display:flex;align-items:center;justify-content:space-between;gap:8px;
+            padding:9px 11px;border-radius:9px;cursor:pointer;min-height:44px;
+            border:1px solid ${idx === smartSearchState.selectedIdx ? "rgba(34,211,238,0.6)" : "rgba(255,255,255,0.06)"};
+            background:${idx === smartSearchState.selectedIdx ? "rgba(34,211,238,0.14)" : "rgba(255,255,255,0.03)"};
+            transition:background 0.12s,border-color 0.12s;
+          `;
+          const badges = [];
+          if (item.isSelected) badges.push(`<span style="background:rgba(59,130,246,0.28);color:#93c5fd;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">ĐANG MỞ</span>`);
+          if (item.isAttention) badges.push(`<span style="background:rgba(251,191,36,0.25);color:#fde68a;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">CHỜ DUYỆT</span>`);
+          if (item.isRunning) badges.push(`<span style="background:rgba(16,185,129,0.24);color:#6ee7b7;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">ĐANG CHẠY</span>`);
+
+          const safeTitle = String(item.title || item.projectLabel || "(Không tên)").replace(/</g, "&lt;");
+          const safeProj = String(item.projectLabel || "").replace(/</g, "&lt;");
+          const subtitle = isProj
+            ? "Bấm để xem toàn bộ hội thoại trong dự án này"
+            : (safeProj ? `📁 ${safeProj}` : (item.cascadeId ? `ID: ${item.cascadeId.slice(0, 8)}…` : "Hội thoại"));
+
+          rowEl.innerHTML = `
+            <div style="display:flex;align-items:center;gap:9px;min-width:0;flex:1;">
+              <span style="font-size:16px;flex-shrink:0;">${isProj ? "📁" : "💬"}</span>
+              <div style="min-width:0;flex:1;">
+                <div style="font-size:13px;font-weight:700;color:#f8fafc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${safeTitle}</div>
+                <div style="font-size:11px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;">${subtitle}</div>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:5px;flex-shrink:0;">${badges.join("")}${isProj ? '<span style="color:#38bdf8;font-size:12px;font-weight:700;">→</span>' : ""}</div>
+          `;
+          rowEl.addEventListener("mouseenter", () => {
+            smartSearchState.selectedIdx = idx;
+          });
+          rowEl.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            activateSmartSearchItem(item);
+          });
+          listEl.appendChild(rowEl);
+        });
+      }
+
+      function activateSmartSearchItem(item) {
+        if (!item) return;
+        const isProj = !!(item.isProjectHeader || item.kind === "project");
+        if (isProj) {
+          smartSearchState.projectFilter = item.projectLabel || item.title || "";
+          smartSearchState.scope = "conversations";
+          smartSearchState.query = "";
+          const inp = document.getElementById("agy-ss-input");
+          if (inp) {
+            inp.value = "";
+            inp.focus();
+          }
+          updateSmartSearchScopeButtons();
+          renderSmartSearchResults();
+          return;
+        }
+        closeSmartSearchModal();
+        const jumpPayload = {
+          cascadeId: item.cascadeId || "",
+          title: item.title || "",
+          projectLabel: item.projectLabel || "",
+          href: item.href || "",
+        };
+        if (!isChildChatIframeAlive() && hasChatDomInCurrentDoc() && typeof window.__AGY_LOCAL_CHAT_ACTION === "function") {
+          window.__AGY_LOCAL_CHAT_ACTION("JUMP_CASCADE", jumpPayload);
+        } else {
+          dispatchChatCommandToOwner("AGY_JUMP_CASCADE_V2", { item: jumpPayload });
+        }
+        updateBar(`⚡ Đang chuyển tới: "${(item.title || item.cascadeId).slice(0, 32)}"`, "info", 2200);
+      }
+
+      function updateSmartSearchScopeButtons() {
+        document.querySelectorAll("#agy-smart-search-overlay [data-ss-scope]").forEach((btn) => {
+          const active = btn.getAttribute("data-ss-scope") === smartSearchState.scope;
+          btn.style.background = active ? "rgba(34,211,238,0.24)" : "rgba(255,255,255,0.06)";
+          btn.style.color = active ? "#67e8f9" : "#cbd5e1";
+          btn.style.borderColor = active ? "rgba(34,211,238,0.55)" : "rgba(255,255,255,0.12)";
+        });
+        const rxBtn = document.getElementById("agy-ss-regex-btn");
+        if (rxBtn) {
+          rxBtn.style.background = smartSearchState.useRegex ? "rgba(245,158,11,0.25)" : "rgba(255,255,255,0.08)";
+          rxBtn.style.color = smartSearchState.useRegex ? "#fcd34d" : "#cbd5e1";
+          rxBtn.style.borderColor = smartSearchState.useRegex ? "rgba(245,158,11,0.6)" : "rgba(255,255,255,0.16)";
+        }
+      }
+
+      function closeSmartSearchModal() {
+        smartSearchState.open = false;
+        const ov = document.getElementById("agy-smart-search-overlay");
+        if (ov) ov.remove();
+        smartSearchBtn.style.background = "rgba(6, 182, 212, 0.20)";
+      }
+
+      async function openSmartSearchModal() {
+        await loadSmartSearchCatalog();
+        smartSearchState.open = true;
+        smartSearchState.selectedIdx = 0;
+        smartSearchBtn.style.background = "rgba(34, 211, 238, 0.36)";
+
+        let ov = document.getElementById("agy-smart-search-overlay");
+        if (ov) ov.remove();
+
+        ov = document.createElement("div");
+        ov.id = "agy-smart-search-overlay";
+        ov.setAttribute("data-agy-ui", "1");
+        ov.style.cssText = `
+          position:fixed!important;inset:0!important;z-index:2147483647!important;
+          background:rgba(2,6,23,0.72)!important;backdrop-filter:blur(6px)!important;
+          display:flex!important;align-items:flex-start!important;justify-content:center!important;
+          padding:max(14px, env(safe-area-inset-top)) 10px 14px!important;
+          font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif!important;
+        `;
+
+        const card = document.createElement("div");
+        card.style.cssText = `
+          width:min(560px, 100%)!important;max-height:82vh!important;
+          background:#0f172a!important;border:1px solid rgba(56,189,248,0.4)!important;
+          border-radius:16px!important;box-shadow:0 20px 50px rgba(0,0,0,0.68)!important;
+          display:flex!important;flex-direction:column!important;overflow:hidden!important;color:#f8fafc!important;
+        `;
+
+        card.innerHTML = `
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;background:rgba(15,23,42,0.95);border-bottom:1px solid rgba(255,255,255,0.08);flex-wrap:wrap;">
+            <div style="display:flex;align-items:center;gap:7px;">
+              <span style="font-size:14px;font-weight:800;color:#67e8f9;">🔎⚡ Smart Search AGY 2.0</span>
+              <span style="font-size:10.5px;color:#94a3b8;">(Alt+K)</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <button id="agy-ss-sweep-btn" type="button" style="background:rgba(16,185,129,0.2);border:1px solid rgba(16,185,129,0.45);color:#6ee7b7;border-radius:7px;padding:5px 9px;font-size:11.5px;font-weight:700;cursor:pointer;" title="Quét toàn bộ Sidebar & các mục See all">🔄 Quét đủ</button>
+              <button id="agy-ss-native-btn" type="button" style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.18);color:#e2e8f0;border-radius:7px;padding:5px 9px;font-size:11.5px;font-weight:700;cursor:pointer;" title="Mở Search mặc định của Antigravity (Ctrl+K)">🔍 Search gốc</button>
+              <button id="agy-ss-close-btn" type="button" style="background:transparent;border:none;color:#94a3b8;font-size:18px;font-weight:800;cursor:pointer;padding:2px 6px;">✕</button>
+            </div>
+          </div>
+          <div style="padding:10px 12px 8px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid rgba(255,255,255,0.06);">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <input id="agy-ss-input" type="text" placeholder="Gõ tên dự án (vd: learn) hoặc tên chat không dấu, hoặc /regex/..." style="flex:1;min-width:0;background:#020617;border:1px solid rgba(148,163,184,0.3);border-radius:9px;padding:9px 11px;color:#fff;font-size:13.5px;outline:none;">
+              <button id="agy-ss-regex-btn" type="button" title="Bật/Tắt chế độ Regex (.*)" style="height:37px;padding:0 10px;border-radius:9px;border:1px solid rgba(255,255,255,0.16);font-family:monospace;font-size:13px;font-weight:800;cursor:pointer;">.*</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+              <button data-ss-scope="all" type="button" style="border:1px solid transparent;border-radius:7px;padding:4px 9px;font-size:11.5px;font-weight:700;cursor:pointer;">Tất cả</button>
+              <button data-ss-scope="projects" type="button" style="border:1px solid transparent;border-radius:7px;padding:4px 9px;font-size:11.5px;font-weight:700;cursor:pointer;">📁 Dự án</button>
+              <button data-ss-scope="conversations" type="button" style="border:1px solid transparent;border-radius:7px;padding:4px 9px;font-size:11.5px;font-weight:700;cursor:pointer;">💬 Hội thoại</button>
+              <button data-ss-scope="active" type="button" style="border:1px solid transparent;border-radius:7px;padding:4px 9px;font-size:11.5px;font-weight:700;cursor:pointer;">🟢 Chạy / Chờ</button>
+            </div>
+            <div id="agy-ss-crumb" style="display:none;align-items:center;justify-content:space-between;gap:8px;padding:6px 9px;border-radius:7px;background:rgba(37,99,235,0.22);border:1px solid rgba(59,130,246,0.45);font-size:12px;color:#bfdbfe;"></div>
+            <div id="agy-ss-error" style="display:none;padding:6px 9px;border-radius:7px;background:rgba(239,68,68,0.18);border:1px solid rgba(239,68,68,0.4);font-size:11.5px;color:#fca5a5;"></div>
+          </div>
+          <div id="agy-ss-results" style="flex:1;overflow-y:auto;padding:8px 10px;display:flex;flex-direction:column;gap:5px;"></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 12px;background:rgba(2,6,23,0.7);border-top:1px solid rgba(255,255,255,0.06);font-size:11px;color:#94a3b8;">
+            <span id="agy-ss-stat">Đang tải...</span>
+            <button id="agy-ss-options-btn" type="button" style="background:transparent;border:none;color:#93c5fd;font-size:11px;font-weight:700;cursor:pointer;">⚙️ Cấu hình Handoff</button>
+          </div>
+        `;
+
+        ov.appendChild(card);
+        (document.body || document.documentElement).appendChild(ov);
+
+        ov.addEventListener("click", (e) => {
+          if (e.target === ov) closeSmartSearchModal();
+        });
+        document.getElementById("agy-ss-close-btn").onclick = closeSmartSearchModal;
+        document.getElementById("agy-ss-native-btn").onclick = () => {
+          closeSmartSearchModal();
+          searchBtn.click();
+        };
+        document.getElementById("agy-ss-options-btn").onclick = () => {
+          chrome.runtime.sendMessage({ type: "AGY_OPEN_OPTIONS" });
+        };
+
+        const sweepBtn = document.getElementById("agy-ss-sweep-btn");
+        sweepBtn.onclick = () => {
+          sweepBtn.textContent = "⏳ Đang quét...";
+          sweepBtn.disabled = true;
+          if (!isChildChatIframeAlive() && hasChatDomInCurrentDoc() && typeof window.__AGY_LOCAL_CHAT_ACTION === "function") {
+            window.__AGY_LOCAL_CHAT_ACTION("SWEEP_CATALOG");
+          } else {
+            dispatchChatCommandToOwner("AGY_SWEEP_CATALOG_V2", {});
+          }
+          setTimeout(async () => {
+            await loadSmartSearchCatalog();
+            renderSmartSearchResults();
+            sweepBtn.textContent = "🔄 Quét đủ";
+            sweepBtn.disabled = false;
+          }, 1800);
+        };
+
+        const inp = document.getElementById("agy-ss-input");
+        inp.value = smartSearchState.query;
+        inp.addEventListener("input", () => {
+          smartSearchState.query = inp.value;
+          smartSearchState.selectedIdx = 0;
+          renderSmartSearchResults();
+        });
+        inp.addEventListener("keydown", (e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            if (smartSearchState.projectFilter) {
+              smartSearchState.projectFilter = "";
+              updateSmartSearchScopeButtons();
+              renderSmartSearchResults();
+            } else {
+              closeSmartSearchModal();
+            }
+          } else if (e.key === "ArrowDown") {
+            e.preventDefault();
+            if (smartSearchState.results.length > 0) {
+              smartSearchState.selectedIdx = (smartSearchState.selectedIdx + 1) % smartSearchState.results.length;
+              renderSmartSearchResults();
+            }
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            if (smartSearchState.results.length > 0) {
+              smartSearchState.selectedIdx = (smartSearchState.selectedIdx - 1 + smartSearchState.results.length) % smartSearchState.results.length;
+              renderSmartSearchResults();
+            }
+          } else if (e.key === "Enter") {
+            e.preventDefault();
+            const chosen = smartSearchState.results[smartSearchState.selectedIdx];
+            if (chosen) activateSmartSearchItem(chosen);
+          }
+        });
+
+        document.getElementById("agy-ss-regex-btn").onclick = () => {
+          smartSearchState.useRegex = !smartSearchState.useRegex;
+          updateSmartSearchScopeButtons();
+          renderSmartSearchResults();
+          inp.focus();
+        };
+
+        ov.querySelectorAll("[data-ss-scope]").forEach((btn) => {
+          btn.onclick = () => {
+            smartSearchState.scope = btn.getAttribute("data-ss-scope") || "all";
+            smartSearchState.selectedIdx = 0;
+            updateSmartSearchScopeButtons();
+            renderSmartSearchResults();
+            inp.focus();
+          };
+        });
+
+        updateSmartSearchScopeButtons();
+        renderSmartSearchResults();
+        setTimeout(() => inp.focus(), 40);
+
+        if (smartSearchState.catalog.length === 0) {
+          dispatchChatCommandToOwner("AGY_SWEEP_CATALOG_V2", {});
+          setTimeout(async () => {
+            await loadSmartSearchCatalog();
+            if (smartSearchState.open) renderSmartSearchResults();
+          }, 1200);
+        }
+      }
+
+      window.__AGY_TOGGLE_SMART_SEARCH = (forceOpen) => {
+        if (forceOpen === true || !smartSearchState.open) {
+          openSmartSearchModal();
+        } else {
+          closeSmartSearchModal();
+        }
+      };
+
+      window.__AGY_REFRESH_SMART_SEARCH = async () => {
+        if (!smartSearchState.open) return;
+        await loadSmartSearchCatalog();
+        renderSmartSearchResults();
+      };
+
+      addSafeListener(smartSearchBtn, "click", (e) => {
+        e.stopPropagation();
+        window.__AGY_TOGGLE_SMART_SEARCH();
+      });
+
+      addSafeListener(window, "keydown", (e) => {
+        if (!isCurrentInstance()) return;
+        const isAltK = e.altKey && !e.ctrlKey && !e.metaKey && (e.key || "").toLowerCase() === "k";
+        const isCtrlShiftK = (e.ctrlKey || e.metaKey) && e.shiftKey && (e.key || "").toLowerCase() === "k";
+        if (isAltK || isCtrlShiftK) {
+          e.preventDefault();
+          e.stopPropagation();
+          window.__AGY_TOGGLE_SMART_SEARCH();
+        }
+      }, true);
+
+      row1.appendChild(smartSearchBtn);
 
       // 2. Reading Mode Prompt Toggle Button (📖 / ✏️)
       const toggleBtn = createDockBtn(
@@ -1925,13 +2361,17 @@
         const node = m.target;
         return (
           (node.id && node.id.startsWith("agy-")) ||
-          (node.closest && node.closest('[id^="agy-"]'))
+          (node.getAttribute && node.getAttribute("data-agy-ui") === "1") ||
+          (node.closest && node.closest('[id^="agy-"], [data-agy-ui="1"], .agy-handoff-bar, .agy-result-bar, #agy-smart-search-overlay'))
         );
       });
       if (isOnlyOurUI || !isChatOwnerActive()) return;
       scanAndProcess();
       if (typeof window.__AGY_CHECK_IDLE_BG === "function") {
         window.__AGY_CHECK_IDLE_BG();
+      }
+      if (typeof window.__AGY_SCAN_HANDOFFS === "function") {
+        window.__AGY_SCAN_HANDOFFS();
       }
     });
 
@@ -2569,6 +3009,143 @@
         }
       }
 
+      function extractCascadeIdFromUrl() {
+        const urls = [window.location.href || "", hostTabMeta.url || ""];
+        for (const u of urls) {
+          if (!u) continue;
+          const m1 = u.match(/\/(?:c|remote|chat)\/([0-9a-f-]{8,})/i);
+          if (m1) return m1[1];
+          const m2 = u.match(/[?&]p=c(?:%2F|\/)([0-9a-f-]{8,})/i);
+          if (m2) return m2[1];
+        }
+        return "";
+      }
+
+      async function injectPromptText(rawText, options = {}) {
+        const text = String(rawText || "");
+        const autoSubmit = Boolean(options.autoSubmit);
+        const retries = Number(options.retries || 5);
+        if (!isCurrentInstance()) return { ok: false, error: "Instance outdated" };
+
+        if (isPromptHidden) {
+          isPromptHidden = false;
+          pausedReadingForApproval = false;
+          applyPromptVisibility();
+          try {
+            window.top.postMessage({ type: "AGY_PROMPT_STATE", hidden: false }, "*");
+          } catch (err) {}
+        }
+
+        let box = findRealChatInputBox();
+        for (let attempt = 0; !box && attempt < retries; attempt++) {
+          await smartDelay(220);
+          box = findRealChatInputBox();
+        }
+        if (!box) {
+          return { ok: false, error: "Khong tim thay o nhap chat AGY." };
+        }
+
+        try { box.scrollIntoView({ behavior: "smooth", block: "center" }); } catch (e) {}
+        box.focus();
+
+        const isContentEditable =
+          box.getAttribute("contenteditable") === "true" ||
+          box.getAttribute("role") === "combobox" ||
+          box.isContentEditable;
+
+        if (isContentEditable) {
+          try {
+            document.execCommand("selectAll", false, null);
+            document.execCommand("delete", false, null);
+          } catch (e) {}
+
+          if ((box.textContent || "").trim().length > 0) {
+            try {
+              const sel = window.getSelection();
+              const range = document.createRange();
+              range.selectNodeContents(box);
+              sel.removeAllRanges();
+              sel.addRange(range);
+              document.execCommand("delete", false, null);
+            } catch (e) {}
+          }
+
+          if (text.includes("\n")) {
+            try {
+              const dt = new DataTransfer();
+              dt.setData("text/plain", text);
+              box.dispatchEvent(new ClipboardEvent("paste", {
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+                clipboardData: dt,
+              }));
+            } catch (e) {}
+            if ((box.textContent || "").trim().length === 0) {
+              try {
+                document.execCommand("insertText", false, text);
+              } catch (e) {}
+            }
+          } else {
+            try {
+              document.execCommand("insertText", false, text);
+            } catch (e) {}
+            if ((box.textContent || "").trim().length === 0) {
+              try {
+                const dt = new DataTransfer();
+                dt.setData("text/plain", text);
+                box.dispatchEvent(new ClipboardEvent("paste", {
+                  bubbles: true,
+                  cancelable: true,
+                  composed: true,
+                  clipboardData: dt,
+                }));
+              } catch (e) {}
+            }
+          }
+
+          try {
+            box.dispatchEvent(new InputEvent("input", {
+              bubbles: true,
+              cancelable: true,
+              composed: true,
+              inputType: "insertText",
+              data: text.slice(0, 64),
+            }));
+            box.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+            box.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+          } catch (e) {}
+        } else {
+          try {
+            const proto = box instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+            const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+            if (setter) {
+              setter.call(box, text);
+            } else {
+              box.value = text;
+            }
+          } catch (e) {
+            box.value = text;
+          }
+          box.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+          box.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+        }
+
+        if (autoSubmit) {
+          await smartDelay(160);
+          if (typeof window.__AGY_MARK_RUNNING === "function") {
+            window.__AGY_MARK_RUNNING(1600);
+          }
+          const sendBtn = findPromptSendButton(box);
+          if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute("aria-disabled") !== "true") {
+            forceClick(sendBtn);
+          } else {
+            triggerPromptSubmit(box);
+          }
+        }
+        return { ok: true };
+      }
+
       // ─── 1-Tap Recent Conversation Tracker & Switcher (v21) ───────────────
       function normalizeTitleForMatch(t) {
         return (t || "").replace(/\.{2,}|…$/g, "").trim().toLowerCase().substring(0, 15);
@@ -2908,10 +3485,25 @@
         const items = [];
         const convRows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
 
+        // Map each visible row to nearest preceding project-header in DOM order if data-subtext is absent
+        const rowProjectMap = new Map();
+        try {
+          const orderedNodes = document.querySelectorAll('button[data-testid="project-header"], [data-testid="conversation-row-sidebar"]');
+          let currentProj = "";
+          for (const node of orderedNodes) {
+            if (node.matches('button[data-testid="project-header"]')) {
+              currentProj = (node.getAttribute("data-project-label") || node.innerText || node.textContent || "").replace(/\s+/g, " ").trim();
+            } else if (currentProj) {
+              rowProjectMap.set(node, currentProj);
+            }
+          }
+        } catch (_) {}
+
         if (convRows.length > 0) {
           for (const row of convRows) {
             if (!isElementVisible(row)) continue;
             const link = row.querySelector("a[href]") || row;
+            const href = (row.querySelector("a[href]")?.getAttribute("href") || "");
             const title = (
               row.querySelector("a[aria-label]")?.getAttribute("aria-label") ||
               row.querySelector(".truncate")?.textContent ||
@@ -2924,6 +3516,7 @@
             const projectId = row.closest("[data-sidebar-section-id]")?.getAttribute("data-sidebar-section-id") || "";
             const selected = row.getAttribute("data-selected") === "true";
             const subtext = row.getAttribute("data-subtext") || "";
+            const projectLabel = (subtext || rowProjectMap.get(row) || "").trim();
 
             let hasAttentionBadge = false;
             let hasStopBtn = false;
@@ -2960,6 +3553,8 @@
               rowEl: row,
               cascadeId,
               projectId,
+              projectLabel,
+              href,
               title,
               selected,
               subtext,
@@ -3226,6 +3821,7 @@
       // ─── Smart Multi-Project Patrol & Batch Auto-Approval State Machine (v24) ──
       const patrolCooldowns = new Map();
       let patrolHomeCascadeId = null;
+      let lastKnownSelectedCascadeId = "";
       let patrolVisit = null;
       let patrolBusy = false;
       let lastSweepAt = 0;
@@ -3383,6 +3979,15 @@
           const normActive = normalizeTitleForMatch(activeChat);
           let items = collectSidebarItems({ detectBadges: true });
           const selectedItem = items.find((i) => i.selected);
+          const urlCascadeId = extractCascadeIdFromUrl();
+          if (!patrolVisit && (selectedItem?.cascadeId || urlCascadeId)) {
+            lastKnownSelectedCascadeId = selectedItem?.cascadeId || urlCascadeId;
+          }
+
+          // Mobile safety: if sidebar rows aren't rendered/visible, never force navigation hops during patrol
+          if (items.length === 0) {
+            return;
+          }
 
           // If we are inside an active patrol check visit, wait >= 2.2s before leaving
           if (patrolVisit && now - patrolVisit.startedAt < 2200) {
@@ -3425,8 +4030,9 @@
           }
 
           if (candidate) {
-            if (!patrolHomeCascadeId && settings.autoReturnHome !== false && selectedItem?.cascadeId) {
-              patrolHomeCascadeId = selectedItem.cascadeId;
+            const currentHomeId = selectedItem?.cascadeId || urlCascadeId || lastKnownSelectedCascadeId;
+            if (!patrolHomeCascadeId && settings.autoReturnHome !== false && currentHomeId) {
+              patrolHomeCascadeId = currentHomeId;
             }
             patrolCooldowns.set(candidate.key, {
               ts: Date.now(),
@@ -3452,7 +4058,8 @@
             patrolVisit = null;
             const homeId = patrolHomeCascadeId;
             patrolHomeCascadeId = null;
-            if (homeId && settings.autoReturnHome !== false && selectedItem?.cascadeId !== homeId) {
+            const currentNowId = selectedItem?.cascadeId || extractCascadeIdFromUrl();
+            if (homeId && settings.autoReturnHome !== false && currentNowId !== homeId) {
               const ok = await switchToCascadeId(homeId);
               if (ok) {
                 updateBar(
@@ -3713,6 +4320,786 @@
         setTimeout(sendIframeBridgeHeartbeat, 300);
       }
 
+      // ─── Smart Search Catalog Scraper, Sweep & Direct Jump (v2.0.0) ───────────
+      let cachedMappings = [];
+      let cachedCatalog = [];
+      let cachedJobs = {};
+      let lastCatalogSig = "";
+      let lastCatalogSyncAt = 0;
+      let catalogSweepBusy = false;
+      const notifiedResultKeys = new Set();
+
+      async function refreshHandoffStorageCache() {
+        try {
+          const data = await chrome.storage.local.get([
+            "agy_project_mappings",
+            "agy_search_index",
+            "agy_local_catalog",
+            "agy_handoff_jobs"
+          ]);
+          cachedMappings = Array.isArray(data.agy_project_mappings) ? data.agy_project_mappings : [];
+          const a = Array.isArray(data.agy_search_index) ? data.agy_search_index : [];
+          const b = Array.isArray(data.agy_local_catalog) ? data.agy_local_catalog : [];
+          const map = new Map();
+          for (const it of [...a, ...b]) {
+            if (!it) continue;
+            const k = it.cascadeId || ("proj:" + String(it.projectLabel || it.title || "").toLowerCase());
+            if (!map.has(k)) map.set(k, it);
+          }
+          cachedCatalog = Array.from(map.values());
+          cachedJobs = data.agy_handoff_jobs && typeof data.agy_handoff_jobs === "object" ? data.agy_handoff_jobs : {};
+        } catch (_) {}
+      }
+
+      function fetchHostTabInfoOnce() {
+        if (isTop) return;
+        try {
+          chrome.runtime.sendMessage({ type: "AGY_GET_SELF_TAB_INFO" }, (resp) => {
+            if (chrome.runtime.lastError || !resp || !resp.ok) return;
+            if (resp.url) hostTabMeta.url = resp.url;
+            if (resp.title) hostTabMeta.title = resp.title;
+          });
+        } catch (_) {}
+      }
+
+      function getCurrentProjectLabel() {
+        const selectedRow = document.querySelector('[data-testid="conversation-row-sidebar"][data-selected="true"]');
+        if (selectedRow) {
+          const sub = (selectedRow.getAttribute("data-subtext") || "").trim();
+          if (sub) return sub;
+          const sec = selectedRow.closest("[data-sidebar-section-id]");
+          const hdr = sec?.querySelector('button[data-testid="project-header"]');
+          const hdrLabel = (hdr?.getAttribute("data-project-label") || hdr?.textContent || "").trim();
+          if (hdrLabel) return hdrLabel;
+        }
+        const crumbs = Array.from(document.querySelectorAll("header *, nav *")).filter((el) => {
+          const t = (el.textContent || "").trim();
+          return el.children.length === 0 && t.includes(" / ") && t.length < 120;
+        });
+        if (crumbs.length > 0) {
+          return (crumbs[0].textContent || "").split(" / ")[0].trim();
+        }
+        return "";
+      }
+
+      function getCurrentRemoteContext() {
+        const rawUrl = isTop ? window.location.href : (hostTabMeta.url || window.location.href);
+        const rawTitle = isTop ? document.title : (hostTabMeta.title || document.title);
+        const base = HANDOFF_CORE
+          ? HANDOFF_CORE.extractRemoteContextFromUrl(rawUrl, rawTitle)
+          : { url: rawUrl, title: rawTitle, workspaceId: "", projectId: "", cascadeId: "", isRemote: /\/remote\//i.test(rawUrl), suggestedMatch: rawUrl };
+        return {
+          ...base,
+          projectLabel: getCurrentProjectLabel() || base.projectLabel || "",
+          cascadeId: extractCascadeIdFromUrl() || base.cascadeId || "",
+        };
+      }
+
+      function collectCatalogSnapshot() {
+        if (!isChatOwnerActive()) return [];
+        const itemsMap = new Map();
+        const now = Date.now();
+
+        function upsert(entry) {
+          if (!entry) return;
+          const key = entry.isProjectHeader
+            ? "proj:" + String(entry.projectLabel || entry.title || "").toLowerCase()
+            : (entry.cascadeId || ("chat:" + String(entry.title || "").toLowerCase()));
+          if (!key || key === "proj:" || key === "chat:") return;
+          const prev = itemsMap.get(key) || {};
+          itemsMap.set(key, { ...prev, ...entry, updatedAt: entry.updatedAt || prev.updatedAt || now });
+        }
+
+        // 1. Visible Project Headers
+        document.querySelectorAll('button[data-testid="project-header"]').forEach((btn) => {
+          const lbl = (btn.getAttribute("data-project-label") || btn.innerText || btn.textContent || "").replace(/\s+/g, " ").trim();
+          if (!lbl) return;
+          upsert({
+            isProjectHeader: true,
+            kind: "project",
+            projectLabel: lbl,
+            title: lbl,
+            cascadeId: "",
+            updatedAt: now,
+          });
+        });
+
+        // 2. Visible Sidebar Conversation Rows (+ synthesize project entry for every projectLabel seen)
+        const sidebarRows = collectSidebarItems({ detectBadges: true });
+        for (const r of sidebarRows) {
+          const proj = (r.projectLabel || r.subtext || "").trim();
+          if (proj) {
+            upsert({
+              isProjectHeader: true,
+              kind: "project",
+              projectLabel: proj,
+              title: proj,
+              cascadeId: "",
+              updatedAt: now,
+            });
+          }
+          if (r.cascadeId) {
+            upsert({
+              isProjectHeader: false,
+              kind: "conversation",
+              cascadeId: r.cascadeId,
+              title: r.title,
+              projectLabel: proj,
+              href: r.href || "",
+              isSelected: !!r.selected,
+              isAttention: !!r.hasAttentionBadge,
+              isRunning: !!(r.hasStopBtn || r.rowEl?.querySelector('[data-testid="status-loading-spinner"]')),
+              updatedAt: now,
+            });
+          }
+        }
+
+        // 3. Opportunistically capture visible Fastpick items when native Ctrl+K search is open
+        document.querySelectorAll('[data-testid^="fastpick-item-"]').forEach((fp) => {
+          const id = fp.getAttribute("data-item-id") || fp.getAttribute("data-testid").replace("fastpick-item-", "") || "";
+          const spans = Array.from(fp.querySelectorAll("span, div")).map((s) => (s.textContent || "").trim()).filter(Boolean);
+          const title = spans[0] || (fp.innerText || "").split("\n")[0]?.trim() || "";
+          if (!id || !title) return;
+          let proj = "";
+          const folder = fp.querySelector('[data-project-glyph="folder"]')?.parentElement?.textContent || "";
+          if (folder) proj = folder.trim();
+          upsert({
+            isProjectHeader: false,
+            kind: "conversation",
+            cascadeId: id,
+            title: title.slice(0, 140),
+            projectLabel: proj,
+            updatedAt: now,
+          });
+        });
+
+        return Array.from(itemsMap.values());
+      }
+
+      function syncCatalogToBackground(force = false) {
+        if (!isCurrentInstance() || !isChatOwnerActive()) return;
+        const snapshot = collectCatalogSnapshot();
+        const remoteCtx = getCurrentRemoteContext();
+        const sig = `${remoteCtx.url}|${remoteCtx.projectLabel}|${snapshot.length}|` +
+          snapshot.slice(0, 12).map((x) => `${x.cascadeId || x.projectLabel}:${x.isRunning ? 1 : 0}:${x.isAttention ? 1 : 0}`).join(",");
+        const now = Date.now();
+        if (!force && sig === lastCatalogSig && now - lastCatalogSyncAt < 12000) return;
+        lastCatalogSig = sig;
+        lastCatalogSyncAt = now;
+
+        try {
+          chrome.runtime.sendMessage({
+            type: "AGY_REGISTER_CATALOG",
+            catalogItems: snapshot,
+            activeProjectLabel: remoteCtx.projectLabel || "",
+            activeCascadeId: remoteCtx.cascadeId || "",
+            isChatOwner: true,
+            remoteContext: remoteCtx,
+          }, () => { void chrome.runtime.lastError; });
+        } catch (_) {}
+      }
+
+      async function sweepFullCatalogForSmartSearch() {
+        if (!isChatOwnerActive() || catalogSweepBusy) return;
+        catalogSweepBusy = true;
+        try {
+          const allMap = new Map();
+          const mergeSnap = (snap) => {
+            for (const x of snap) {
+              const k = x.isProjectHeader ? "proj:" + x.projectLabel.toLowerCase() : x.cascadeId;
+              if (k) allMap.set(k, x);
+            }
+          };
+
+          mergeSnap(collectCatalogSnapshot());
+
+          const sc = document.querySelector('[data-testid="conversation-list-sidebar"]');
+          if (sc) {
+            const origTop = sc.scrollTop;
+            const step = Math.max(360, Math.floor((sc.clientHeight || 400) * 0.85));
+            for (let y = 0, steps = 0; y <= sc.scrollHeight + step && steps < 35; y += step, steps++) {
+              sc.scrollTop = y;
+              sc.dispatchEvent(new Event("scroll", { bubbles: true }));
+              await smartDelay(75);
+              mergeSnap(collectCatalogSnapshot());
+            }
+            sc.scrollTop = origTop;
+            sc.dispatchEvent(new Event("scroll", { bubbles: true }));
+          }
+
+          // Expand collapsed project headers or "See all (N)" buttons transiently to capture hidden chats
+          const seeAllBtns = Array.from(document.querySelectorAll("button, a, [role='button']")).filter((b) => {
+            if (!isElementVisible(b)) return false;
+            const t = (b.textContent || "").trim();
+            return /^see all\s*(\(\d+\))?$/i.test(t) || /^xem tất cả/i.test(t);
+          }).slice(0, 5);
+
+          for (const btn of seeAllBtns) {
+            try {
+              forceClick(btn);
+              await smartDelay(260);
+              mergeSnap(collectCatalogSnapshot());
+            } catch (_) {}
+          }
+
+          const collected = Array.from(allMap.values());
+          const remoteCtx = getCurrentRemoteContext();
+          chrome.runtime.sendMessage({
+            type: "AGY_REGISTER_CATALOG",
+            catalogItems: collected,
+            activeProjectLabel: remoteCtx.projectLabel || "",
+            activeCascadeId: remoteCtx.cascadeId || "",
+            isChatOwner: true,
+            remoteContext: remoteCtx,
+          }, () => { void chrome.runtime.lastError; });
+
+          try {
+            window.top.postMessage({ type: "AGY_SWEEP_DONE_V2", count: collected.length }, "*");
+          } catch (_) {}
+        } finally {
+          catalogSweepBusy = false;
+        }
+      }
+
+      async function handleJumpToCatalogItem(item) {
+        if (!item || !isChatOwnerActive()) return false;
+        if (item.cascadeId && await switchToCascadeId(item.cascadeId)) {
+          return true;
+        }
+
+        // Mobile fallback: if sidebar rows aren't rendered, tap top-left sidebar/back trigger once requested
+        const visibleRows = document.querySelectorAll('[data-testid="conversation-row-sidebar"]');
+        if (visibleRows.length === 0) {
+          const toggleBtn = Array.from(document.querySelectorAll('button, a, [role="button"]')).find((b) => {
+            if (b.id && b.id.startsWith("agy-")) return false;
+            if (!isElementVisible(b)) return false;
+            const lbl = ((b.getAttribute("aria-label") || "") + " " + (b.title || "")).toLowerCase();
+            const r = b.getBoundingClientRect();
+            return r.top < 72 && r.left < 80 && (/back|sidebar|menu|drawer|conversations|quay lại/.test(lbl) || !!b.querySelector("svg"));
+          });
+          if (toggleBtn) {
+            forceClick(toggleBtn);
+            await smartDelay(450);
+            if (item.cascadeId && await switchToCascadeId(item.cascadeId)) {
+              return true;
+            }
+          }
+        }
+
+        if (item.title && switchToConversation(item.title)) {
+          return true;
+        }
+
+        if (item.href && item.href.startsWith("/")) {
+          const a = document.createElement("a");
+          a.href = item.href;
+          a.style.display = "none";
+          document.body.appendChild(a);
+          forceClick(a);
+          setTimeout(() => a.remove(), 200);
+          return true;
+        }
+        return false;
+      }
+
+      // ─── Handoff 1-Click & Return Result System (v2.0.0) ─────────────────────
+      function injectHandoffStyles() {
+        if (document.getElementById("agy-handoff-style")) return;
+        const st = document.createElement("style");
+        st.id = "agy-handoff-style";
+        st.setAttribute("data-agy-ui", "1");
+        st.textContent = `
+          .agy-handoff-bar, .agy-result-bar {
+            margin: 6px 0 12px 0 !important;
+            padding: 10px 12px !important;
+            border-radius: 12px !important;
+            background: rgba(15, 23, 42, 0.95) !important;
+            color: #f8fafc !important;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+            font-size: 12.5px !important;
+            line-height: 1.4 !important;
+            border: 1.5px solid rgba(56, 189, 248, 0.45) !important;
+            box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35) !important;
+            display: flex !important;
+            flex-direction: column !important;
+            gap: 8px !important;
+            max-width: 100% !important;
+            box-sizing: border-box !important;
+          }
+          .agy-result-bar {
+            border-color: rgba(52, 211, 153, 0.55) !important;
+          }
+          .agy-hb-top {
+            display: flex !important;
+            align-items: center !important;
+            justify-content: space-between !important;
+            gap: 8px !important;
+            flex-wrap: wrap !important;
+          }
+          .agy-hb-title {
+            display: flex !important;
+            align-items: center !important;
+            gap: 7px !important;
+            flex-wrap: wrap !important;
+            font-weight: 700 !important;
+          }
+          .agy-hb-badge {
+            background: rgba(37, 99, 235, 0.35) !important;
+            border: 1px solid rgba(96, 165, 250, 0.55) !important;
+            color: #bfdbfe !important;
+            padding: 2px 7px !important;
+            border-radius: 6px !important;
+            font-size: 11px !important;
+            font-weight: 800 !important;
+          }
+          .agy-hb-badge.res {
+            background: rgba(16, 185, 129, 0.25) !important;
+            border-color: rgba(52, 211, 153, 0.55) !important;
+            color: #6ee7b7 !important;
+          }
+          .agy-hb-status {
+            padding: 2px 8px !important;
+            border-radius: 999px !important;
+            font-size: 11px !important;
+            font-weight: 700 !important;
+            background: rgba(255, 255, 255, 0.1) !important;
+            color: #cbd5e1 !important;
+          }
+          .agy-hb-status.sent { background: rgba(16, 185, 129, 0.24) !important; color: #86efac !important; }
+          .agy-hb-status.sending { background: rgba(251, 191, 36, 0.24) !important; color: #fde68a !important; }
+          .agy-hb-status.err { background: rgba(239, 68, 68, 0.24) !important; color: #fca5a5 !important; }
+          .agy-hb-controls {
+            display: flex !important;
+            align-items: center !important;
+            gap: 7px !important;
+            flex-wrap: wrap !important;
+          }
+          .agy-hb-select {
+            background: #020617 !important;
+            color: #f8fafc !important;
+            border: 1px solid rgba(148, 163, 184, 0.35) !important;
+            border-radius: 7px !important;
+            padding: 6px 8px !important;
+            font-size: 12px !important;
+            max-width: 220px !important;
+            min-height: 34px !important;
+          }
+          .agy-hb-btn {
+            border: none !important;
+            border-radius: 8px !important;
+            padding: 7px 12px !important;
+            min-height: 36px !important;
+            font-size: 12.5px !important;
+            font-weight: 800 !important;
+            cursor: pointer !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            gap: 5px !important;
+            touch-action: manipulation !important;
+          }
+          .agy-hb-btn:disabled { opacity: 0.55 !important; cursor: not-allowed !important; }
+          .agy-hb-btn-primary { background: #2563eb !important; color: #fff !important; }
+          .agy-hb-btn-return { background: #059669 !important; color: #fff !important; }
+          .agy-hb-btn-save { background: rgba(245, 158, 11, 0.22) !important; border: 1px solid rgba(245, 158, 11, 0.55) !important; color: #fde68a !important; }
+          .agy-hb-btn-sec { background: rgba(255, 255, 255, 0.1) !important; border: 1px solid rgba(255, 255, 255, 0.2) !important; color: #e2e8f0 !important; }
+          .agy-hb-check {
+            display: inline-flex !important;
+            align-items: center !important;
+            gap: 4px !important;
+            font-size: 11.5px !important;
+            color: #cbd5e1 !important;
+            cursor: pointer !important;
+          }
+        `;
+        (document.head || document.documentElement).appendChild(st);
+      }
+
+      function getAllKnownLocalProjects(resolvedProject) {
+        const set = new Set();
+        if (resolvedProject) set.add(resolvedProject);
+        for (const m of cachedMappings) {
+          if (m && m.localProject) set.add(m.localProject.trim());
+        }
+        for (const c of cachedCatalog) {
+          const p = String(c?.projectLabel || (c?.isProjectHeader ? c.title : "") || "").trim();
+          if (p) set.add(p);
+        }
+        return Array.from(set).filter(Boolean).sort((a, b) => a.localeCompare(b));
+      }
+
+      async function copyTextSafe(text) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return true;
+        } catch (_) {
+          try {
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            ta.style.cssText = "position:fixed;top:-9999px;left:-9999px;opacity:0;";
+            document.body.appendChild(ta);
+            ta.select();
+            const ok = document.execCommand("copy");
+            ta.remove();
+            return !!ok;
+          } catch (e2) {
+            return false;
+          }
+        }
+      }
+
+      function renderHandoffBar(codeContainer, handoff) {
+        injectHandoffStyles();
+        let bar = codeContainer.nextElementSibling;
+        if (!bar || !bar.classList || !bar.classList.contains("agy-handoff-bar")) {
+          bar = document.createElement("div");
+          bar.className = "agy-handoff-bar";
+          bar.setAttribute("data-agy-ui", "1");
+          codeContainer.insertAdjacentElement("afterend", bar);
+        }
+
+        const remoteCtx = getCurrentRemoteContext();
+        const resolved = HANDOFF_CORE
+          ? HANDOFF_CORE.resolveTargetMapping(handoff, remoteCtx, cachedMappings, cachedCatalog)
+          : { matchedBy: "unmatched", mapping: null, targetLocalProject: "", targetCascadeId: "" };
+
+        const hid = handoff.id || "no-id";
+        const job = cachedJobs[hid] || null;
+        const jobStatus = bar.dataset.sending === "1" ? "sending" : (job?.status || "ready");
+        const chosenProj = bar.dataset.userSelectedProj !== undefined
+          ? bar.dataset.userSelectedProj
+          : (resolved.targetLocalProject || resolved.suggestedLocalProject || "");
+        const projects = getAllKnownLocalProjects(chosenProj);
+
+        const sig = JSON.stringify([
+          handoff.complete ? 1 : 0,
+          hid,
+          handoff.targetProject,
+          handoff.actionSummary,
+          jobStatus,
+          resolved.matchedBy,
+          resolved.targetLocalProject,
+          chosenProj,
+          projects.join("|"),
+        ]);
+        if (bar.dataset.agySig === sig) return;
+        bar.dataset.agySig = sig;
+
+        if (!handoff.complete) {
+          bar.innerHTML = `
+            <div class="agy-hb-top">
+              <div class="agy-hb-title">
+                <span class="agy-hb-badge">⚡ HANDOFF${hid !== "no-id" ? " #" + hid.replace(/</g, "&lt;") : ""}</span>
+                <span>${String(handoff.actionSummary || "Đang stream nội dung...").replace(/</g, "&lt;")}</span>
+              </div>
+              <span class="agy-hb-status">Stream...</span>
+            </div>
+            <div class="agy-hb-controls">
+              <button type="button" class="agy-hb-btn agy-hb-btn-primary" disabled>⏳ Đang nhận prompt...</button>
+            </div>
+          `;
+          return;
+        }
+
+        const matchLabel =
+          resolved.matchedBy === "alias" ? "Khớp alias" :
+          resolved.matchedBy === "remote_match" ? "Khớp tab Remote" :
+          resolved.matchedBy === "default" ? "Mặc định" : "Chưa liên kết";
+
+        const isSent = jobStatus === "sent" || jobStatus === "queued_new_tab" || jobStatus === "result_ready" || jobStatus === "returned_to_web";
+        const statusText =
+          jobStatus === "sending" ? "Đang gửi..." :
+          jobStatus === "result_ready" ? "✅ Đã có kết quả" :
+          isSent ? "✅ Đã gửi" :
+          jobStatus === "failed" ? "⚠️ Gửi lỗi" : "Sẵn sàng";
+        const statusCls =
+          jobStatus === "sending" ? "sending" :
+          isSent ? "sent" :
+          jobStatus === "failed" ? "err" : "";
+
+        const needsQuickSave =
+          Boolean(chosenProj) &&
+          (resolved.matchedBy === "unmatched" || resolved.matchedBy === "default" || (resolved.targetLocalProject && chosenProj !== resolved.targetLocalProject));
+
+        bar.innerHTML = `
+          <div class="agy-hb-top">
+            <div class="agy-hb-title">
+              <span class="agy-hb-badge">⚡ HANDOFF #${hid.replace(/</g, "&lt;")}</span>
+              <span>${String(handoff.actionSummary || "(Không có mô tả)").replace(/</g, "&lt;")}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+              <span class="agy-hb-status">${matchLabel}</span>
+              <span class="agy-hb-status ${statusCls}">${statusText}</span>
+            </div>
+          </div>
+          <div class="agy-hb-controls">
+            <select class="agy-hb-select" title="Chọn dự án AGY Local đích">
+              <option value="">-- Chọn dự án Local --</option>
+              ${projects.map((p) => `<option value="${p.replace(/"/g, "&quot;")}" ${p === chosenProj ? "selected" : ""}>📁 ${p.replace(/</g, "&lt;")}</option>`).join("")}
+            </select>
+            <label class="agy-hb-check" title="Mở cuộc trò chuyện mới trước khi gửi prompt">
+              <input type="checkbox" class="agy-hb-newchat" ${bar.dataset.newChat === "1" ? "checked" : ""}> + Chat mới
+            </label>
+            <button type="button" class="agy-hb-btn agy-hb-btn-primary agy-hb-send" ${(jobStatus === "sending" || !chosenProj) ? "disabled" : ""}>
+              ${jobStatus === "sending" ? "⏳ Đang gửi..." : (isSent ? `🔄 Gửi lại (${chosenProj.replace(/</g, "&lt;")})` : `▶ Gửi sang Local (${(chosenProj || "Chọn dự án").replace(/</g, "&lt;")})`)}
+            </button>
+            ${needsQuickSave ? `<button type="button" class="agy-hb-btn agy-hb-btn-save agy-hb-quicksave">💾 Lưu liên kết này</button>` : ""}
+            <button type="button" class="agy-hb-btn agy-hb-btn-sec agy-hb-opts" title="Mở Setting Remote <-> Local">⚙️</button>
+          </div>
+        `;
+
+        const sel = bar.querySelector(".agy-hb-select");
+        const chk = bar.querySelector(".agy-hb-newchat");
+        const sendBtn = bar.querySelector(".agy-hb-send");
+        const saveBtn = bar.querySelector(".agy-hb-quicksave");
+        const optsBtn = bar.querySelector(".agy-hb-opts");
+
+        if (sel) {
+          sel.onchange = () => {
+            bar.dataset.userSelectedProj = sel.value;
+            bar.dataset.agySig = "";
+            renderHandoffBar(codeContainer, handoff);
+          };
+        }
+        if (chk) {
+          chk.onchange = () => {
+            bar.dataset.newChat = chk.checked ? "1" : "0";
+          };
+        }
+        if (optsBtn) {
+          optsBtn.onclick = () => chrome.runtime.sendMessage({ type: "AGY_OPEN_OPTIONS" });
+        }
+        if (saveBtn) {
+          saveBtn.onclick = async () => {
+            const projToSave = sel ? sel.value.trim() : chosenProj;
+            if (!projToSave) return;
+            const aliasToSave = !HANDOFF_CORE.isGenericTargetProject(handoff.targetProject)
+              ? handoff.targetProject
+              : projToSave.toLowerCase().replace(/[^a-z0-9/_-]+/g, "-");
+            const resp = await chrome.runtime.sendMessage({
+              type: "AGY_SAVE_QUICK_MAPPING",
+              payload: {
+                alias: aliasToSave,
+                remoteMatch: remoteCtx.suggestedMatch || remoteCtx.projectLabel || remoteCtx.url,
+                localProject: projToSave,
+                isDefault: cachedMappings.length === 0,
+              },
+            });
+            if (resp && resp.ok) {
+              await refreshHandoffStorageCache();
+              bar.dataset.agySig = "";
+              renderHandoffBar(codeContainer, handoff);
+              updateBar(`💾 Đã lưu liên kết ${aliasToSave} -> ${projToSave}!`, "success", 2600);
+            }
+          };
+        }
+        if (sendBtn) {
+          sendBtn.onclick = async () => {
+            if (bar.dataset.sending === "1") return;
+            const targetProj = sel ? sel.value.trim() : chosenProj;
+            if (!targetProj) {
+              updateBar("⚠️ Hãy chọn dự án Local đích trước khi gửi!", "warning", 2200);
+              return;
+            }
+            bar.dataset.sending = "1";
+            bar.dataset.agySig = "";
+            renderHandoffBar(codeContainer, handoff);
+
+            const matchedMapping = resolved.mapping && resolved.mapping.localProject === targetProj
+              ? resolved.mapping
+              : cachedMappings.find((m) => HANDOFF_CORE.normalizeSearchText(m.localProject) === HANDOFF_CORE.normalizeSearchText(targetProj));
+            const formattedPrompt = HANDOFF_CORE
+              ? HANDOFF_CORE.formatOutgoingHandoffPrompt(handoff)
+              : handoff.prompt;
+
+            try {
+              const res = await chrome.runtime.sendMessage({
+                type: "AGY_DISPATCH_HANDOFF",
+                payload: {
+                  handoff,
+                  targetLocalProject: targetProj,
+                  targetCascadeId: matchedMapping?.localCascadeId || "",
+                  createNewChat: chk ? chk.checked : false,
+                  formattedPrompt,
+                  sourceRemoteCtx: remoteCtx,
+                },
+              });
+              await refreshHandoffStorageCache();
+              if (res && res.ok) {
+                updateBar(`✅ Đã gửi Handoff #${hid} sang Local (${targetProj})!`, "success", 2800);
+              } else {
+                updateBar(`⚠️ ${(res && res.error) || "Gửi Handoff thất bại"}`, "warning", 3500);
+              }
+            } catch (err) {
+              updateBar("⚠️ Lỗi kết nối background khi gửi Handoff", "warning", 3000);
+            } finally {
+              bar.dataset.sending = "0";
+              bar.dataset.agySig = "";
+              renderHandoffBar(codeContainer, handoff);
+            }
+          };
+        }
+      }
+
+      function renderResultBar(codeContainer, result) {
+        injectHandoffStyles();
+        const notifyKey = `${result.id}|${(result.body || "").slice(0, 80)}`;
+        if (result.id && !notifiedResultKeys.has(notifyKey)) {
+          notifiedResultKeys.add(notifyKey);
+          try {
+            chrome.runtime.sendMessage({ type: "AGY_NOTIFY_RESULT_READY", payload: { result } }, () => {
+              void chrome.runtime.lastError;
+            });
+          } catch (_) {}
+        }
+
+        let bar = codeContainer.nextElementSibling;
+        if (!bar || !bar.classList || !bar.classList.contains("agy-result-bar")) {
+          bar = document.createElement("div");
+          bar.className = "agy-result-bar";
+          bar.setAttribute("data-agy-ui", "1");
+          codeContainer.insertAdjacentElement("afterend", bar);
+        }
+
+        const sig = `${result.id}|${result.status}|${(result.body || "").length}`;
+        if (bar.dataset.agySig === sig) return;
+        bar.dataset.agySig = sig;
+
+        bar.innerHTML = `
+          <div class="agy-hb-top">
+            <div class="agy-hb-title">
+              <span class="agy-hb-badge res">↩ KẾT QUẢ #${String(result.id || "?").replace(/</g, "&lt;")}</span>
+              <span>${String(result.summary || "Sẵn sàng trả kết quả về bản Web Remote").replace(/</g, "&lt;")}</span>
+            </div>
+            <span class="agy-hb-status sent">${String(result.status || "done").replace(/</g, "&lt;")}</span>
+          </div>
+          <div class="agy-hb-controls">
+            <button type="button" class="agy-hb-btn agy-hb-btn-return agy-res-return">↩ Dán kết quả về Web</button>
+            <button type="button" class="agy-hb-btn agy-hb-btn-sec agy-res-copy">📋 Copy kết quả</button>
+          </div>
+        `;
+
+        const returnBtn = bar.querySelector(".agy-res-return");
+        const copyBtn = bar.querySelector(".agy-res-copy");
+        if (returnBtn) {
+          returnBtn.onclick = async () => {
+            returnBtn.disabled = true;
+            returnBtn.textContent = "⏳ Đang dán về Web...";
+            try {
+              const resp = await chrome.runtime.sendMessage({
+                type: "AGY_RETURN_RESULT_TO_WEB",
+                payload: {
+                  id: result.id,
+                  result,
+                  formattedReturn: result.rawBlock || result.body,
+                },
+              });
+              if (resp && resp.ok) {
+                returnBtn.textContent = "✅ Đã dán vào ô chat Web!";
+                updateBar("✓ Đã dán kết quả về tab Web — kiểm tra rồi bấm Gửi!", "success", 3200);
+              } else {
+                returnBtn.textContent = "↩ Dán kết quả về Web";
+                updateBar(`⚠️ ${(resp && resp.error) || "Không tìm thấy tab Web Remote"}`, "warning", 3200);
+              }
+            } catch (_) {
+              returnBtn.textContent = "↩ Dán kết quả về Web";
+            } finally {
+              setTimeout(() => { if (returnBtn) returnBtn.disabled = false; }, 1200);
+            }
+          };
+        }
+        if (copyBtn) {
+          copyBtn.onclick = async () => {
+            const ok = await copyTextSafe(result.rawBlock || result.body || "");
+            updateBar(ok ? "✓ Đã copy kết quả Handoff!" : "⚠️ Trình duyệt chặn Copy", ok ? "success" : "warning", 2200);
+          };
+        }
+      }
+
+      function scanHandoffAndResultBlocks() {
+        if (!isCurrentInstance() || !isChatOwnerActive() || !HANDOFF_CORE) return;
+        const nodes = document.querySelectorAll("pre, code");
+        for (const el of nodes) {
+          if (el.closest('[data-agy-ui="1"], #agy-control-container, #agy-smart-search-overlay')) continue;
+          if (el.tagName === "CODE" && el.closest("pre")) continue;
+          const raw = el.innerText || el.textContent || "";
+          if (!raw.includes(HANDOFF_CORE.HANDOFF_START_MARKER) && !raw.includes(HANDOFF_CORE.RESULT_START_MARKER)) {
+            continue;
+          }
+
+          if (raw.includes(HANDOFF_CORE.HANDOFF_START_MARKER)) {
+            const h = HANDOFF_CORE.parseHandoffBlock(raw);
+            if (h.found) {
+              if (h.id === "<handoff_id>" || h.prompt === "<nội dung prompt nhiều dòng>") continue;
+              const anchorEl = el.closest("pre") || el;
+              renderHandoffBar(anchorEl, h);
+            }
+          }
+
+          if (raw.includes(HANDOFF_CORE.RESULT_START_MARKER)) {
+            const r = HANDOFF_CORE.parseResultBlock(raw);
+            if (r.found && r.complete) {
+              if (!r.body || /^<ket qua/i.test(r.body.trim())) continue;
+              const anchorEl = el.closest("pre") || el;
+              renderResultBar(anchorEl, r);
+            }
+          }
+        }
+      }
+
+      function scheduleHandoffDomScan() {
+        if (!isCurrentInstance() || !isChatOwnerActive()) return;
+        clearTimeout(window.__AGY_HANDOFF_DEBOUNCE);
+        window.__AGY_HANDOFF_DEBOUNCE = setTimeout(scanHandoffAndResultBlocks, 220);
+      }
+      window.__AGY_SCAN_HANDOFFS = scheduleHandoffDomScan;
+
+      async function executeIncomingLocalHandoff(payload) {
+        if (!payload || !isChatOwnerActive()) {
+          return { ok: false, error: "Frame chua san sang nhan lenh Local" };
+        }
+        const targetProj = String(payload.targetLocalProject || "").trim();
+        let targetId = String(payload.targetCascadeId || "").trim();
+
+        if (!targetId && targetProj && HANDOFF_CORE) {
+          const normProj = HANDOFF_CORE.normalizeSearchText(targetProj);
+          const visibleMatch = collectSidebarItems({ detectBadges: false }).find(
+            (i) => i.cascadeId && HANDOFF_CORE.normalizeSearchText(i.projectLabel) === normProj
+          );
+          if (visibleMatch) {
+            targetId = visibleMatch.cascadeId;
+          } else {
+            const catMatch = cachedCatalog.find(
+              (c) => !c.isProjectHeader && c.cascadeId && HANDOFF_CORE.normalizeSearchText(c.projectLabel) === normProj
+            );
+            if (catMatch) targetId = catMatch.cascadeId;
+          }
+        }
+
+        if (targetId && extractCascadeIdFromUrl() !== targetId) {
+          const switched = await switchToCascadeId(targetId);
+          if (switched) await smartDelay(750);
+        }
+
+        if (payload.createNewChat) {
+          const newBtn = Array.from(document.querySelectorAll('[data-testid="new-conversation-button"], a[aria-label*="New Conversation" i], button[aria-label*="New Conversation" i]'))
+            .find((b) => isElementVisible(b));
+          if (newBtn) {
+            forceClick(newBtn);
+            await smartDelay(650);
+          }
+        }
+
+        const injectRes = await injectPromptText(payload.prompt || "", { autoSubmit: true, retries: 6 });
+        if (!injectRes.ok) return injectRes;
+
+        updateBar(`⚡ Đã nhận & gửi Handoff #${payload.id || ""} trên Local!`, "success", 3200);
+        return {
+          ok: true,
+          chatTitle: getCurrentConversationTitle() || "",
+          cascadeId: extractCascadeIdFromUrl() || targetId || "",
+        };
+      }
+
       window.__AGY_EXEC_BRIDGE_CMD_LOCAL = (cmd) => executeBridgeCommand(cmd);
       window.__AGY_LOCAL_CHAT_ACTION = (action, data = {}) => {
         if (!isCurrentInstance()) return;
@@ -3731,6 +5118,12 @@
           case "TOGGLE_SEARCH":
             toggleSearchDialog();
             break;
+          case "SWEEP_CATALOG":
+            sweepFullCatalogForSmartSearch();
+            break;
+          case "JUMP_CASCADE":
+            handleJumpToCatalogItem(data);
+            break;
           case "DUMP_DOM":
             dumpSidebarDom({ copyClipboard: true });
             break;
@@ -3747,6 +5140,8 @@
       addSafeListener(window, "message", (e) => {
         if (isTop || !isChatOwnerActive()) return;
         if (e.data && e.data.type === "AGY_HEARTBEAT_TICK_V24") {
+          if (e.data.topUrl) hostTabMeta.url = e.data.topUrl;
+          if (e.data.topTitle) hostTabMeta.title = e.data.topTitle;
           flushTickWaiters();
           scanAndProcess();
           runMultiProjectPatrol();
@@ -3772,6 +5167,12 @@
         if (e.data && (e.data.type === "AGY_TOGGLE_SEARCH_V25" || e.data.type === "AGY_TRIGGER_SEARCH_V22")) {
           toggleSearchDialog();
         }
+        if (e.data && e.data.type === "AGY_SWEEP_CATALOG_V2") {
+          sweepFullCatalogForSmartSearch();
+        }
+        if (e.data && e.data.type === "AGY_JUMP_CASCADE_V2") {
+          handleJumpToCatalogItem(e.data.item || e.data);
+        }
         if (e.data && e.data.type === "AGY_DUMP_SIDEBAR_REQ") {
           dumpSidebarDom({ copyClipboard: true });
         }
@@ -3783,19 +5184,94 @@
         }
       });
 
-      // Also listen to popup requests via chrome.runtime.onMessage
+      // Relay Smart Search shortcut (Alt+K / Ctrl+Shift+K) from child iframes to Top frame
+      if (!isTop) {
+        addSafeListener(window, "keydown", (e) => {
+          if (!isCurrentInstance()) return;
+          const isAltK = e.altKey && !e.ctrlKey && !e.metaKey && (e.key || "").toLowerCase() === "k";
+          const isCtrlShiftK = (e.ctrlKey || e.metaKey) && e.shiftKey && (e.key || "").toLowerCase() === "k";
+          if (isAltK || isCtrlShiftK) {
+            e.preventDefault();
+            e.stopPropagation();
+            try { window.top.postMessage({ type: "AGY_OPEN_SMART_SEARCH_V2" }, "*"); } catch (_) {}
+          }
+        }, true);
+      }
+
+      // Listen to Popup & Background messages (only the active chat-owner frame handles & responds)
       try {
-        chrome.runtime.onMessage.addListener((msg) => {
-          if (!isChatOwnerActive() || !msg) return;
+        chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+          if (!isCurrentInstance() || !isChatOwnerActive() || !msg) return false;
           if (msg.type === "AGY_DUMP_SIDEBAR_REQ") {
             dumpSidebarDom({ copyClipboard: true });
-          } else if (msg.type === "AGY_PING_PROOF_REQ") {
-            sendProofSnapshot(null, "Kiểm tra từ Popup Extension", lastBridgeOnline);
-          } else if (msg.type === "AGY_ENABLE_STATUS_GROUP_V24") {
-            enableStatusGroupView();
+            return false;
           }
+          if (msg.type === "AGY_PING_PROOF_REQ") {
+            sendProofSnapshot(null, "Kiểm tra từ Popup Extension", lastBridgeOnline);
+            return false;
+          }
+          if (msg.type === "AGY_ENABLE_STATUS_GROUP_V24") {
+            enableStatusGroupView();
+            return false;
+          }
+          if (msg.type === "AGY_EXECUTE_HANDOFF_LOCAL") {
+            executeIncomingLocalHandoff(msg.payload)
+              .then(sendResponse)
+              .catch((err) => sendResponse({ ok: false, error: err?.message || String(err) }));
+            return true;
+          }
+          if (msg.type === "AGY_FILL_RESULT_ON_WEB") {
+            const txt = String((msg.payload && msg.payload.text) || "");
+            injectPromptText(txt, { autoSubmit: false, retries: 5 })
+              .then((res) => {
+                if (res && res.ok) {
+                  updateBar("✓ Đã điền kết quả vào ô chat — hãy kiểm tra rồi bấm Gửi!", "success", 3500);
+                }
+                sendResponse(res || { ok: false });
+              })
+              .catch((err) => sendResponse({ ok: false, error: err?.message || String(err) }));
+            return true;
+          }
+          return false;
         });
       } catch (err) {}
+
+      // Sync Handoff storage cache & periodic Catalog/Handoff loops
+      if (chrome?.storage?.onChanged) {
+        const storageListener = (_changes, area) => {
+          if (area !== "local" || !isCurrentInstance() || !isChatOwnerActive()) return;
+          refreshHandoffStorageCache().then(() => {
+            document.querySelectorAll(".agy-handoff-bar").forEach((b) => { b.dataset.agySig = ""; });
+            scanHandoffAndResultBlocks();
+          });
+        };
+        chrome.storage.onChanged.addListener(storageListener);
+      }
+
+      fetchHostTabInfoOnce();
+      refreshHandoffStorageCache().then(() => {
+        if (isChatOwnerActive()) {
+          syncCatalogToBackground(true);
+          scanHandoffAndResultBlocks();
+        }
+      });
+
+      window.__AGY_CATALOG_INTERVAL = setInterval(() => syncCatalogToBackground(false), 3500);
+      window.__AGY_HANDOFF_INTERVAL = setInterval(scanHandoffAndResultBlocks, 1500);
+
+      // Single-use pending Local Handoff recovery (if new Local tab was opened on dispatch)
+      setTimeout(async () => {
+        if (!isCurrentInstance() || !isChatOwnerActive()) return;
+        const ctx = getCurrentRemoteContext();
+        if (ctx.isRemote) return;
+        try {
+          const data = await chrome.storage.local.get(["agy_pending_local_handoff"]);
+          const pending = data.agy_pending_local_handoff;
+          if (!pending || !pending.prompt || Number(pending.expiresAt || 0) < Date.now()) return;
+          await chrome.storage.local.remove("agy_pending_local_handoff");
+          await executeIncomingLocalHandoff(pending);
+        } catch (_) {}
+      }, 1300);
 
       // 4. Continuously ensure the prompt card is lifted above dock / navigation bar
       function liftPromptCard() {
@@ -3965,6 +5441,58 @@
           });
         }
 
+        function findFullComposerCard(promptBox) {
+          if (!promptBox) return null;
+          let best = promptBox.closest('[id*="agentSidePanelInputBox" i]') || promptBox.closest("form") || promptBox;
+          let cur = best;
+          let depth = 0;
+          while (cur && cur.parentElement && cur.parentElement !== document.body && cur.parentElement !== document.documentElement && depth < 7) {
+            const parent = cur.parentElement;
+            if (parent.matches("main, nav, aside, header, [role='dialog']")) break;
+            if (parent.classList.contains("overflow-y-auto") || parent.classList.contains("overflow-y-scroll")) break;
+            if (isApprovalContainerNode(parent)) break;
+            const hasSiblingFeed = Array.from(parent.querySelectorAll(".overflow-y-auto, .overflow-y-scroll")).some(
+              (sc) => !cur.contains(sc) && sc !== cur && sc.getBoundingClientRect().height > 100
+            );
+            if (hasSiblingFeed) break;
+            const rect = parent.getBoundingClientRect();
+            if (rect.height > Math.max(360, window.innerHeight * 0.55)) break;
+            best = parent;
+            cur = parent;
+            depth++;
+          }
+          return best;
+        }
+
+        function isRedStopButtonVisual(btn) {
+          if (!btn || btn.closest('[id^="agy-"], [data-agy-ui="1"]')) return false;
+          const lbl = ((btn.getAttribute("aria-label") || "") + " " + (btn.title || "") + " " + (btn.getAttribute("data-testid") || "")).toLowerCase();
+          if (/mic|voice|audio|attach|upload|permission|model|context|feedback|delete|trash|remove|error|plus|add/.test(lbl)) {
+            return false;
+          }
+          if (/stop|cancel|abort|interrupt|dừng|hủy/.test(lbl)) return true;
+
+          const targets = [btn, btn.querySelector("svg"), btn.querySelector("path"), btn.querySelector("rect"), btn.querySelector("span")].filter(Boolean);
+          for (const el of targets) {
+            try {
+              const cs = window.getComputedStyle(el);
+              const colorStrs = [cs.backgroundColor, cs.color, cs.fill, cs.stroke];
+              for (const raw of colorStrs) {
+                if (!raw || raw === "none" || raw === "transparent") continue;
+                const m = raw.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?/i);
+                if (!m) continue;
+                const alpha = m[4] === undefined ? 1 : parseFloat(m[4]);
+                if (alpha <= 0.15) continue;
+                const r = Number(m[1]), g = Number(m[2]), b = Number(m[3]);
+                if (r >= 175 && g <= 105 && b <= 105) {
+                  return true;
+                }
+              }
+            } catch (_) {}
+          }
+          return false;
+        }
+
         function detectIsPromptWaitingIdle() {
           if (Date.now() < manualForceRunningUntil) return false;
           if (isProcessing) return false;
@@ -3976,42 +5504,68 @@
           const hasOpenChat =
             window.location.pathname.includes("/c/") ||
             /\/remote\/[0-9a-f-]{8,}/i.test(window.location.pathname) ||
+            /\/remote\/[0-9a-f-]{8,}/i.test(hostTabMeta.url || "") ||
             !!getCurrentConversationTitle();
           if (!hasOpenChat) return false;
 
           if (findApprovalDialog()) return false;
 
           const composerRoot = findPromptContainerToHide(promptBox);
-          const stopSelector = 'button[aria-label*="stop" i], button[aria-label*="interrupt" i], button[aria-label*="dừng" i], button[title*="stop" i], button[data-testid*="stop" i]';
+          const fullComposer = findFullComposerCard(promptBox) || composerRoot;
+          const stopSelector = 'button[aria-label*="stop" i], button[aria-label*="cancel" i], button[aria-label*="abort" i], button[aria-label*="interrupt" i], button[aria-label*="dừng" i], button[aria-label*="hủy" i], button[title*="stop" i], button[title*="cancel" i], button[data-testid*="stop" i], button[data-testid*="cancel" i]';
 
-          if (composerRoot) {
-            const composerStops = Array.from(composerRoot.querySelectorAll(stopSelector));
-            if (composerStops.some((b) => !b.closest('[id^="agy-"]') && (isPromptHidden || isElementVisible(b)))) {
+          if (fullComposer) {
+            const composerStops = Array.from(fullComposer.querySelectorAll(stopSelector));
+            if (composerStops.some((b) => !b.closest('[id^="agy-"], [data-agy-ui="1"]') && (isPromptHidden || isElementVisible(b)))) {
               return false;
             }
-            const rectBtns = Array.from(composerRoot.querySelectorAll("button:has(svg rect)")).filter((b) => {
-              if (b.closest('[id^="agy-"]')) return false;
-              const lbl = (b.getAttribute("aria-label") || b.title || "").toLowerCase();
-              if (/context|model|mic|voice|audio|attach|upload|permission|preset|feedback|plus|add/.test(lbl)) return false;
-              return isPromptHidden || isElementVisible(b);
+            const rectBtns = Array.from(fullComposer.querySelectorAll("button:has(svg rect), button")).filter((b) => {
+              if (b.closest('[id^="agy-"], [data-agy-ui="1"]')) return false;
+              if (!isPromptHidden && !isElementVisible(b)) return false;
+              if (b.querySelector("svg rect")) {
+                const lbl = (b.getAttribute("aria-label") || b.title || "").toLowerCase();
+                if (!/context|model|mic|voice|audio|attach|upload|permission|preset|feedback|plus|add|collapse|expand/.test(lbl)) {
+                  return true;
+                }
+              }
+              return isRedStopButtonVisual(b);
             });
             if (rectBtns.length > 0) return false;
+
+            // Missing Send button check: Antigravity replaces Send (→) with Stop (■) while AI runs
+            const sendBtn = findPromptSendButton(promptBox);
+            const toolbarBtns = Array.from(fullComposer.querySelectorAll("button")).filter(
+              (b) => !b.closest('[id^="agy-"], [data-agy-ui="1"]') && isElementVisible(b)
+            );
+            if (toolbarBtns.length > 0 && (!sendBtn || !(isPromptHidden ? document.contains(sendBtn) : isElementVisible(sendBtn)))) {
+              return false;
+            }
           }
 
           const globalStops = Array.from(document.querySelectorAll(stopSelector));
           for (const b of globalStops) {
-            if (b.closest('[data-testid="conversation-list-sidebar"], nav, aside, [role="navigation"], [id^="agy-"], [role="dialog"]')) continue;
+            if (b.closest('[data-testid="conversation-list-sidebar"], nav, aside, [role="navigation"], [id^="agy-"], [data-agy-ui="1"], [role="dialog"]')) continue;
             if (!isElementVisible(b)) continue;
             if (b.getBoundingClientRect().top > 70) return false;
           }
 
-          const selectedRow = document.querySelector('[data-testid="conversation-row-sidebar"][data-selected="true"]');
-          if (selectedRow && selectedRow.querySelector('button[aria-label*="Stop" i], button[aria-label*="Cancel" i], [data-testid*="spinner" i]')) {
+          const activeCascadeId = extractCascadeIdFromUrl();
+          const selectedRow =
+            document.querySelector('[data-testid="conversation-row-sidebar"][data-selected="true"]') ||
+            (activeCascadeId ? document.querySelector(`[data-testid="conversation-row-sidebar"][data-cascade-id="${activeCascadeId}"]`) : null);
+          if (selectedRow && selectedRow.querySelector('button[aria-label*="Stop" i], button[aria-label*="Cancel" i], [data-testid*="spinner" i], [aria-busy="true"]')) {
             return false;
           }
 
-          const progressEls = Array.from((composerRoot || document).querySelectorAll('[role="progressbar"]'));
-          if (progressEls.some((el) => !el.closest('[data-testid="conversation-list-sidebar"], [id^="agy-"]') && isElementVisible(el))) {
+          const activeRunSelectors = '[data-testid="status-loading-spinner"], [role="progressbar"], [aria-busy="true"], svg.animate-spin';
+          const loadingEls = Array.from((fullComposer || document).querySelectorAll(activeRunSelectors));
+          if (loadingEls.some((el) => !el.closest('[data-testid="conversation-list-sidebar"], [id^="agy-"], [data-agy-ui="1"]') && (isPromptHidden || isElementVisible(el)))) {
+            return false;
+          }
+
+          // Also check visible chat feed loading spinner / aria-busy outside sidebar
+          const feedLoading = Array.from(document.querySelectorAll('[data-testid="status-loading-spinner"], [aria-busy="true"]'));
+          if (feedLoading.some((el) => !el.closest('[data-testid="conversation-list-sidebar"], [id^="agy-"], [data-agy-ui="1"], nav, aside') && isElementVisible(el))) {
             return false;
           }
 

@@ -18,12 +18,12 @@ if exist "C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python312\pythonw.ex
 
 :found_pyw
 echo [AGY-Bridge] Tim thay pythonw: %PYW_EXE%
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%LNK_PATH%'); $s.TargetPath = '%PYW_EXE%'; $s.Arguments = '-B \"\"%SCRIPT_PATH%\"\"'; $s.WorkingDirectory = '%~dp0'; $s.WindowStyle = 7; $s.Description = 'Auto Antigravity 2-Way Extension Bridge (Silent)'; $s.Save()"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$q = [char]34; $ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%LNK_PATH%'); $s.TargetPath = '%PYW_EXE%'; $s.Arguments = '-B ' + $q + '%SCRIPT_PATH%' + $q; $s.WorkingDirectory = '%~dp0'; $s.WindowStyle = 7; $s.Description = 'Auto Antigravity 2-Way Extension Bridge (Silent)'; $s.Save()"
 if exist "%LNK_PATH%" (
   echo [OK] Da cai dat tu khoi dong ngam cung Windows tai:
   echo      %LNK_PATH%
-  echo [INFO] Dang khoi chay ngam ngay bay gio...
-  start "" "%PYW_EXE%" -B "%SCRIPT_PATH%"
+  echo [INFO] Dang khoi chay ngam tu shortcut Startup...
+  start "" "%LNK_PATH%"
   echo [DONE] Hoan tat! Khong hien cua so CMD den khi mo may.
 ) else (
   echo [LOI] Khong tao duoc shortcut Startup!

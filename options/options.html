@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AGY 2.0 — Cấu hình Handoff Remote ↔ Local</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="page-wrap">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-badge">⚡2.0</div>
+        <div>
+          <h1>Cấu hình liên thông Handoff (Remote ↔ Local)</h1>
+          <p class="subtitle">Liên kết nhanh dự án Antigravity Web (Remote) với dự án Antigravity Local — An toàn, 1-click thủ công, không lưu token/mật khẩu.</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button id="btn-export-json" class="btn btn-secondary" title="Xuất file JSON cấu hình">📤 Xuất JSON</button>
+        <button id="btn-import-toggle" class="btn btn-secondary" title="Nhập JSON từ file hoặc dán text">📥 Nhập JSON</button>
+        <input id="file-import-json" type="file" accept=".json,application/json" hidden>
+      </div>
+    </header>
+
+    <div id="status-banner" class="status-banner hidden" role="status"></div>
+
+    <!-- Import Drawer -->
+    <section id="import-panel" class="card import-panel hidden">
+      <div class="card-head">
+        <h2>📥 Nhập cấu hình JSON</h2>
+        <button id="btn-import-close" class="btn-icon" title="Đóng">✕</button>
+      </div>
+      <div class="import-controls">
+        <button id="btn-choose-file" class="btn btn-primary">📂 Chọn file .json</button>
+        <span class="muted">hoặc dán trực tiếp nội dung JSON vào ô dưới (chỉ giữ trường liên kết an toàn, tự loại bỏ key lạ):</span>
+      </div>
+      <textarea id="txt-import-json" rows="4" placeholder='[{"alias":"sonha-map","remoteMatch":"af14e779-...","localProject":"SonHa Map","isDefault":false}]'></textarea>
+      <div class="import-footer">
+        <label class="inline-check">
+          <input type="checkbox" id="chk-import-merge" checked>
+          <span>Gộp với danh sách hiện tại (bỏ chọn để ghi đè hoàn toàn)</span>
+        </label>
+        <button id="btn-apply-import" class="btn btn-safe">✓ Áp dụng JSON</button>
+      </div>
+    </section>
+
+    <div class="main-grid">
+      <!-- Form Thêm / Sửa -->
+      <section class="card form-card">
+        <div class="card-head">
+          <h2 id="form-title">➕ Thêm cặp liên kết mới</h2>
+          <button id="btn-reset-form" class="btn btn-ghost hidden">Hủy sửa</button>
+        </div>
+
+        <input type="hidden" id="inp-edit-id" value="">
+
+        <div class="field">
+          <label for="inp-alias">Tên ngắn / Alias (hoặc repo chung) <span class="req">*</span></label>
+          <input type="text" id="inp-alias" placeholder="vd: auto-antigravity, sonha-map, dmteam/sonha-map">
+          <small class="hint">Dùng để khớp trường <code>target_project: &lt;alias&gt;</code> trong khối Handoff.</small>
+        </div>
+
+        <div class="field">
+          <div class="label-row">
+            <label for="inp-remote-match">Nhận diện Web Remote (<code>remoteMatch</code>)</label>
+            <button id="btn-grab-remote" type="button" class="btn btn-mini btn-blue">📍 Lấy từ tab Remote hiện tại</button>
+          </div>
+          <input type="text" id="inp-remote-match" placeholder="vd: af14e779-823d-... hoặc ?project=id hoặc tên dự án Web">
+          <small id="remote-grab-preview" class="hint">Khi <code>target_project</code> là <code>current</code> hoặc <code>any</code>, extension tự so khớp URL / Workspace ID / Tên tab Web với trường này.</small>
+        </div>
+
+        <div class="field">
+          <div class="label-row">
+            <label for="sel-local-catalog">Dự án Local đích (<code>localProject</code>) <span class="req">*</span></label>
+            <button id="btn-refresh-catalog" type="button" class="btn btn-mini btn-ghost">🔄 Làm mới danh sách</button>
+          </div>
+          <select id="sel-local-catalog">
+            <option value="">-- Chọn từ danh sách dự án Local đã phát hiện (hoặc nhập tay dưới) --</option>
+          </select>
+          <input type="text" id="inp-local-project" placeholder="Tên chính xác dự án trên AGY Local (vd: Auto Antigravity)" style="margin-top:6px;">
+          <input type="text" id="inp-local-cascade" placeholder="Cascade ID hội thoại cố định (tùy chọn — bỏ trống sẽ chọn hội thoại mới nhất trong dự án)" style="margin-top:6px;">
+        </div>
+
+        <label class="inline-check default-check">
+          <input type="checkbox" id="chk-is-default">
+          <span>Đặt làm dự án mặc định (<code>isDefault</code>) khi tab Web chưa có liên kết riêng</span>
+        </label>
+
+        <div class="form-actions">
+          <button id="btn-save-mapping" class="btn btn-primary btn-full">💾 Lưu cặp liên kết</button>
+        </div>
+
+        <div class="tip-box">
+          <strong>💡 Mẹo nhanh ngay tại trang Chat:</strong> Nếu bạn mở một tab Web Remote mới chưa cấu hình, thanh Handoff sẽ hiện dropdown chọn dự án Local kèm nút <strong>💾 Lưu liên kết này</strong> ngay tại chỗ — không cần mở lại trang Cài đặt!
+        </div>
+      </section>
+
+      <!-- Danh sách Mapping đã lưu -->
+      <section class="card list-card">
+        <div class="card-head">
+          <h2>🔗 Danh sách cặp Remote ↔ Local (<span id="mapping-count">0</span>)</h2>
+          <span id="catalog-stat" class="pill">Catalog: 0 mục</span>
+        </div>
+
+        <div id="mapping-list" class="mapping-list">
+          <div class="empty-state">Chưa có cặp liên kết nào. Hãy dùng form bên cạnh hoặc nút "📍 Lấy từ tab Remote hiện tại".</div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Danh mục Catalog & Lịch sử Handoff gần đây -->
+    <section class="card bottom-card">
+      <div class="card-head">
+        <h2>📋 Dự án Local đã quét & Lịch sử Handoff gần đây</h2>
+        <div class="mini-tabs">
+          <button id="tab-btn-catalog" class="mini-tab active">📁 Dự án Local (<span id="catalog-proj-count">0</span>)</button>
+          <button id="tab-btn-jobs" class="mini-tab">⚡ Lịch sử Handoff (<span id="jobs-count">0</span>)</button>
+        </div>
+      </div>
+      <div id="pane-catalog" class="bottom-pane"></div>
+      <div id="pane-jobs" class="bottom-pane hidden"></div>
+    </section>
+  </div>
+
+  <script src="../handoff_core.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

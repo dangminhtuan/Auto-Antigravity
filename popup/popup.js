@@ -167,6 +167,36 @@ async function loadLog() {
 
 // ── Clear log ───────────────────────────────────────────────────────────────
 
+const elBtnOpenOptions = document.getElementById("btn-open-options");
+const elHandoffMappingCount = document.getElementById("handoff-mapping-count");
+const elHandoffCatalogInfo = document.getElementById("handoff-catalog-info");
+
+async function loadHandoffSummary() {
+  try {
+    const data = await chrome.storage.local.get(["agy_project_mappings", "agy_search_index", "agy_handoff_jobs"]);
+    const maps = Array.isArray(data.agy_project_mappings) ? data.agy_project_mappings : [];
+    const idx = Array.isArray(data.agy_search_index) ? data.agy_search_index : [];
+    const jobs = data.agy_handoff_jobs && typeof data.agy_handoff_jobs === "object" ? Object.keys(data.agy_handoff_jobs).length : 0;
+    if (elHandoffMappingCount) {
+      elHandoffMappingCount.textContent = maps.length + " cap";
+    }
+    if (elHandoffCatalogInfo) {
+      const projs = new Set(idx.map((x) => x && x.projectLabel).filter(Boolean));
+      elHandoffCatalogInfo.textContent = `Catalog: ${projs.size} du an / ${idx.length} muc • Handoff: ${jobs} job`;
+    }
+  } catch (_) {}
+}
+
+if (elBtnOpenOptions) {
+  elBtnOpenOptions.addEventListener("click", () => {
+    if (chrome.runtime.openOptionsPage) {
+      chrome.runtime.openOptionsPage();
+    } else {
+      window.open(chrome.runtime.getURL("options/options.html"), "_blank");
+    }
+  });
+}
+
 elBtnClear.addEventListener("click", async () => {
   await chrome.storage.local.set({ agy_log: [] });
   loadLog();
@@ -176,3 +206,4 @@ elBtnClear.addEventListener("click", async () => {
 
 loadSettings();
 loadLog();
+loadHandoffSummary();
