@@ -35,29 +35,63 @@
     let projectId = "";
     let cascadeId = "";
     let isRemote = false;
+    let isUnifiedShell = false;
+
+    function parseNestedPParam(rawP) {
+      if (!rawP) return;
+      let decoded = String(rawP);
+      try {
+        decoded = decodeURIComponent(decoded);
+      } catch (_) {}
+      const pChatMatch = decoded.match(/(?:^|\/)c\/([a-zA-Z0-9_-]{8,})/i);
+      if (pChatMatch && !cascadeId) {
+        cascadeId = pChatMatch[1];
+      }
+      const pProjMatch = decoded.match(/[?&]project=([^&#]+)/i);
+      if (pProjMatch && !projectId) {
+        try {
+          projectId = decodeURIComponent(pProjMatch[1]);
+        } catch (_) {
+          projectId = pProjMatch[1];
+        }
+      }
+    }
 
     if (rawUrl) {
       try {
         const parsed = new URL(rawUrl);
         const path = parsed.pathname || "";
         const remoteMatch = path.match(/\/remote\/([a-zA-Z0-9_-]{8,})/i);
+        const shellMatch = path.match(/\/r\/([a-zA-Z0-9_-]{8,})/i);
         const chatMatch = path.match(/\/(?:c|chat)\/([a-zA-Z0-9_-]{8,})/i);
         if (remoteMatch) {
           workspaceId = remoteMatch[1];
           isRemote = true;
+        } else if (shellMatch) {
+          workspaceId = shellMatch[1];
+          isUnifiedShell = true;
         }
         if (chatMatch) {
           cascadeId = chatMatch[1];
         }
         projectId = parsed.searchParams.get("project") || "";
+        const pParam = parsed.searchParams.get("p") || "";
+        parseNestedPParam(pParam);
         if (!isRemote && /\/remote\//i.test(path)) {
           isRemote = true;
         }
+        if (!isUnifiedShell && /\/r\//i.test(path)) {
+          isUnifiedShell = true;
+        }
       } catch (_) {
         const remoteMatch = rawUrl.match(/\/remote\/([a-zA-Z0-9_-]{8,})/i);
+        const shellMatch = rawUrl.match(/\/r\/([a-zA-Z0-9_-]{8,})/i);
         if (remoteMatch) {
           workspaceId = remoteMatch[1];
           isRemote = true;
+        } else if (shellMatch) {
+          workspaceId = shellMatch[1];
+          isUnifiedShell = true;
         }
         const chatMatch = rawUrl.match(/\/(?:c|chat)\/([a-zA-Z0-9_-]{8,})/i);
         if (chatMatch) {
@@ -71,6 +105,10 @@
             projectId = projMatch[1];
           }
         }
+        const rawPMatch = rawUrl.match(/[?&]p=([^&#]+)/i);
+        if (rawPMatch) {
+          parseNestedPParam(rawPMatch[1]);
+        }
       }
     }
 
@@ -81,7 +119,8 @@
       projectId: projectId,
       cascadeId: cascadeId,
       isRemote: isRemote,
-      suggestedMatch: projectId || workspaceId || rawUrl
+      isUnifiedShell: isUnifiedShell,
+      suggestedMatch: projectId || workspaceId || cascadeId || rawUrl
     };
   }
 
@@ -426,7 +465,7 @@
       if (scope === "conversations" && isProject) continue;
       if (scope === "active" && !isActive) continue;
 
-      const projStr = String(item.projectLabel || (isProject ? item.title : "") || "");
+      const projStr = String(item.projectLabel || item.subtext || (isProject ? item.title : "") || "");
       const titleStr = String(item.title || "");
       const cascadeStr = String(item.cascadeId || "");
 
@@ -441,7 +480,8 @@
         const matchedProj = rx.test(projStr);
         const matchedId = cascadeStr ? rx.test(cascadeStr) : false;
         if (!matchedTitle && !matchedProj && !matchedId) continue;
-        score = (matchedTitle ? 120 : 0) + (matchedProj ? 90 : 0) + (matchedId ? 40 : 0);
+        score = (matchedTitle ? 120 : 0) + (matchedProj ? 95 : 0) + (matchedId ? 40 : 0);
+        if (isProject) score += 35;
       } else if (tokens.length > 0) {
         const titleNorm = normalizeSearchText(titleStr);
         const projNorm = normalizeSearchText(projStr);
@@ -457,18 +497,29 @@
         }
         if (!allTokensMatch) continue;
 
+        const wordBoundaryMatch = (text, q) => {
+          if (!text || !q) return false;
+          const parts = text.split(/[\s_\-/.,:()]+/).filter(Boolean);
+          return parts.some((w) => w === q || w.indexOf(q) === 0);
+        };
+
         if (titleNorm === queryNorm || projNorm === queryNorm) {
-          score += 300;
+          score += 320;
+        } else if (titleNorm.indexOf(queryNorm) === 0 || projNorm.indexOf(queryNorm) === 0) {
+          score += 240;
+        } else if (wordBoundaryMatch(projNorm, queryNorm) || wordBoundaryMatch(titleNorm, queryNorm)) {
+          score += 210;
+        } else if (titleNorm.indexOf(queryNorm) !== -1 || projNorm.indexOf(queryNorm) !== -1) {
+          score += 120;
         } else {
-          if (titleNorm.indexOf(queryNorm) === 0 || projNorm.indexOf(queryNorm) === 0) {
-            score += 180;
-          } else if (titleNorm.indexOf(queryNorm) !== -1 || projNorm.indexOf(queryNorm) !== -1) {
-            score += 110;
-          } else {
-            score += 60;
-          }
+          score += 65;
         }
-        if (isProject) score += 25;
+
+        if (isProject && projNorm.indexOf(queryNorm) !== -1) {
+          score += 55;
+        } else if (isProject) {
+          score += 20;
+        }
       } else {
         score = isProject ? 80 : 50;
       }

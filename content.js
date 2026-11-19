@@ -9,7 +9,7 @@
  */
 
 (() => {
-  const AGY_VERSION = "2.0.0";
+  const AGY_VERSION = "2.0.1";
   const HANDOFF_CORE = typeof window !== "undefined" ? window.AGY_HANDOFF_CORE : null;
   let hostTabMeta = { url: window.self === window.top ? window.location.href : "", title: window.self === window.top ? document.title : "" };
   // ─── Guard: Run on Antigravity / AI Studio top frames and ALL non-noise Antigravity/remote subframes ─
@@ -141,6 +141,7 @@
     try { delete window.__AGY_SCAN_HANDOFFS; } catch (e) {}
     try { delete window.__AGY_TOGGLE_SMART_SEARCH; } catch (e) {}
     try { delete window.__AGY_REFRESH_SMART_SEARCH; } catch (e) {}
+    try { delete window.__AGY_SWEEP_UI_PROGRESS; } catch (e) {}
     try {
       document.body?.classList.remove("agy-idle-light", "agy-idle-dark");
       document.querySelectorAll("[data-agy-idle-pane], [data-agy-idle-scroller], [data-agy-idle-footer], [data-agy-idle-card], [data-agy-idle-body]").forEach((el) => {
@@ -640,9 +641,14 @@
           window.__AGY_TOGGLE_SMART_SEARCH(true);
         }
       }
+      if (e.data && e.data.type === "AGY_SWEEP_PROGRESS_V2") {
+        if (typeof window.__AGY_SWEEP_UI_PROGRESS === "function") {
+          window.__AGY_SWEEP_UI_PROGRESS(e.data);
+        }
+      }
       if (e.data && e.data.type === "AGY_SWEEP_DONE_V2") {
         if (typeof window.__AGY_REFRESH_SMART_SEARCH === "function") {
-          window.__AGY_REFRESH_SMART_SEARCH(e.data.count || 0);
+          window.__AGY_REFRESH_SMART_SEARCH(e.data);
         }
       }
     });
@@ -1017,6 +1023,13 @@
           return;
         }
 
+        const projectChatCounts = new Map();
+        for (const it of smartSearchState.catalog) {
+          if (!it || it.isProjectHeader || !it.cascadeId) continue;
+          const pName = String(it.projectLabel || it.subtext || "").trim().toLowerCase();
+          if (pName) projectChatCounts.set(pName, (projectChatCounts.get(pName) || 0) + 1);
+        }
+
         listEl.innerHTML = "";
         smartSearchState.results.forEach((item, idx) => {
           const isProj = !!(item.isProjectHeader || item.kind === "project");
@@ -1034,9 +1047,11 @@
           if (item.isRunning) badges.push(`<span style="background:rgba(16,185,129,0.24);color:#6ee7b7;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">ĐANG CHẠY</span>`);
 
           const safeTitle = String(item.title || item.projectLabel || "(Không tên)").replace(/</g, "&lt;");
-          const safeProj = String(item.projectLabel || "").replace(/</g, "&lt;");
+          const safeProj = String(item.projectLabel || item.subtext || "").replace(/</g, "&lt;");
+          const projKey = String(item.projectLabel || item.title || "").trim().toLowerCase();
+          const projChats = projectChatCounts.get(projKey) || 0;
           const subtitle = isProj
-            ? "Bấm để xem toàn bộ hội thoại trong dự án này"
+            ? `${projChats > 0 ? projChats + " đoạn thoại" : "Dự án"} — bấm để xem toàn bộ hội thoại`
             : (safeProj ? `📁 ${safeProj}` : (item.cascadeId ? `ID: ${item.cascadeId.slice(0, 8)}…` : "Hội thoại"));
 
           rowEl.innerHTML = `
@@ -1047,7 +1062,7 @@
                 <div style="font-size:11px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;">${subtitle}</div>
               </div>
             </div>
-            <div style="display:flex;align-items:center;gap:5px;flex-shrink:0;">${badges.join("")}${isProj ? '<span style="color:#38bdf8;font-size:12px;font-weight:700;">→</span>' : ""}</div>
+            <div style="display:flex;align-items:center;gap:5px;flex-shrink:0;">${badges.join("")}${isProj ? '<span style="color:#38bdf8;font-size:11px;font-weight:700;background:rgba(56,189,248,0.14);padding:2px 6px;border-radius:5px;">Dự án →</span>' : ""}</div>
           `;
           rowEl.addEventListener("mouseenter", () => {
             smartSearchState.selectedIdx = idx;
@@ -1108,14 +1123,45 @@
 
       function closeSmartSearchModal() {
         smartSearchState.open = false;
+        smartSearchState.isSweeping = false;
+        clearTimeout(smartSearchState._sweepFailTimer);
         const ov = document.getElementById("agy-smart-search-overlay");
         if (ov) ov.remove();
         smartSearchBtn.style.background = "rgba(6, 182, 212, 0.20)";
       }
 
+      function triggerCatalogSweepFromTop() {
+        const sweepBtn = document.getElementById("agy-ss-sweep-btn");
+        smartSearchState.isSweeping = true;
+        if (sweepBtn) {
+          sweepBtn.textContent = "⏳ Đang quét...";
+          sweepBtn.disabled = true;
+        }
+        clearTimeout(smartSearchState._sweepFailTimer);
+        smartSearchState._sweepFailTimer = setTimeout(async () => {
+          smartSearchState.isSweeping = false;
+          const b = document.getElementById("agy-ss-sweep-btn");
+          if (b) {
+            b.textContent = "🔄 Quét đủ";
+            b.disabled = false;
+          }
+          await loadSmartSearchCatalog();
+          if (smartSearchState.open) renderSmartSearchResults();
+        }, 25000);
+
+        if (!isChildChatIframeAlive() && hasChatDomInCurrentDoc() && typeof window.__AGY_LOCAL_CHAT_ACTION === "function") {
+          window.__AGY_LOCAL_CHAT_ACTION("SWEEP_CATALOG");
+        } else {
+          dispatchChatCommandToOwner("AGY_SWEEP_CATALOG_V2", {});
+        }
+      }
+
       async function openSmartSearchModal() {
         await loadSmartSearchCatalog();
+        // Default combined search across BOTH Projects & Conversations every time modal opens
         smartSearchState.open = true;
+        smartSearchState.scope = "all";
+        smartSearchState.projectFilter = "";
         smartSearchState.selectedIdx = 0;
         smartSearchBtn.style.background = "rgba(34, 211, 238, 0.36)";
 
@@ -1144,24 +1190,24 @@
         card.innerHTML = `
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;background:rgba(15,23,42,0.95);border-bottom:1px solid rgba(255,255,255,0.08);flex-wrap:wrap;">
             <div style="display:flex;align-items:center;gap:7px;">
-              <span style="font-size:14px;font-weight:800;color:#67e8f9;">🔎⚡ Smart Search AGY 2.0</span>
+              <span style="font-size:14px;font-weight:800;color:#67e8f9;">🔎⚡ Smart Search AGY ${AGY_VERSION}</span>
               <span style="font-size:10.5px;color:#94a3b8;">(Alt+K)</span>
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
-              <button id="agy-ss-sweep-btn" type="button" style="background:rgba(16,185,129,0.2);border:1px solid rgba(16,185,129,0.45);color:#6ee7b7;border-radius:7px;padding:5px 9px;font-size:11.5px;font-weight:700;cursor:pointer;" title="Quét toàn bộ Sidebar & các mục See all">🔄 Quét đủ</button>
+              <button id="agy-ss-sweep-btn" type="button" style="background:rgba(16,185,129,0.2);border:1px solid rgba(16,185,129,0.45);color:#6ee7b7;border-radius:7px;padding:5px 9px;font-size:11.5px;font-weight:700;cursor:pointer;" title="Cuộn quét toàn bộ Sidebar từ đầu tới cuối">🔄 Quét đủ</button>
               <button id="agy-ss-native-btn" type="button" style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.18);color:#e2e8f0;border-radius:7px;padding:5px 9px;font-size:11.5px;font-weight:700;cursor:pointer;" title="Mở Search mặc định của Antigravity (Ctrl+K)">🔍 Search gốc</button>
               <button id="agy-ss-close-btn" type="button" style="background:transparent;border:none;color:#94a3b8;font-size:18px;font-weight:800;cursor:pointer;padding:2px 6px;">✕</button>
             </div>
           </div>
           <div style="padding:10px 12px 8px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid rgba(255,255,255,0.06);">
             <div style="display:flex;align-items:center;gap:6px;">
-              <input id="agy-ss-input" type="text" placeholder="Gõ tên dự án (vd: learn) hoặc tên chat không dấu, hoặc /regex/..." style="flex:1;min-width:0;background:#020617;border:1px solid rgba(148,163,184,0.3);border-radius:9px;padding:9px 11px;color:#fff;font-size:13.5px;outline:none;">
+              <input id="agy-ss-input" type="text" placeholder="Tìm tổng hợp: gõ tên Dự án (vd: learn) hoặc tên Hội thoại, hoặc /regex/..." style="flex:1;min-width:0;background:#020617;border:1px solid rgba(148,163,184,0.3);border-radius:9px;padding:9px 11px;color:#fff;font-size:13.5px;outline:none;">
               <button id="agy-ss-regex-btn" type="button" title="Bật/Tắt chế độ Regex (.*)" style="height:37px;padding:0 10px;border-radius:9px;border:1px solid rgba(255,255,255,0.16);font-family:monospace;font-size:13px;font-weight:800;cursor:pointer;">.*</button>
             </div>
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-              <button data-ss-scope="all" type="button" style="border:1px solid transparent;border-radius:7px;padding:4px 9px;font-size:11.5px;font-weight:700;cursor:pointer;">Tất cả</button>
-              <button data-ss-scope="projects" type="button" style="border:1px solid transparent;border-radius:7px;padding:4px 9px;font-size:11.5px;font-weight:700;cursor:pointer;">📁 Dự án</button>
-              <button data-ss-scope="conversations" type="button" style="border:1px solid transparent;border-radius:7px;padding:4px 9px;font-size:11.5px;font-weight:700;cursor:pointer;">💬 Hội thoại</button>
+              <button data-ss-scope="all" type="button" style="border:1px solid transparent;border-radius:7px;padding:4px 9px;font-size:11.5px;font-weight:700;cursor:pointer;">✨ Tổng hợp (Tất cả)</button>
+              <button data-ss-scope="projects" type="button" style="border:1px solid transparent;border-radius:7px;padding:4px 9px;font-size:11.5px;font-weight:700;cursor:pointer;">📁 Chỉ Dự án</button>
+              <button data-ss-scope="conversations" type="button" style="border:1px solid transparent;border-radius:7px;padding:4px 9px;font-size:11.5px;font-weight:700;cursor:pointer;">💬 Chỉ Hội thoại</button>
               <button data-ss-scope="active" type="button" style="border:1px solid transparent;border-radius:7px;padding:4px 9px;font-size:11.5px;font-weight:700;cursor:pointer;">🟢 Chạy / Chờ</button>
             </div>
             <div id="agy-ss-crumb" style="display:none;align-items:center;justify-content:space-between;gap:8px;padding:6px 9px;border-radius:7px;background:rgba(37,99,235,0.22);border:1px solid rgba(59,130,246,0.45);font-size:12px;color:#bfdbfe;"></div>
@@ -1190,21 +1236,7 @@
         };
 
         const sweepBtn = document.getElementById("agy-ss-sweep-btn");
-        sweepBtn.onclick = () => {
-          sweepBtn.textContent = "⏳ Đang quét...";
-          sweepBtn.disabled = true;
-          if (!isChildChatIframeAlive() && hasChatDomInCurrentDoc() && typeof window.__AGY_LOCAL_CHAT_ACTION === "function") {
-            window.__AGY_LOCAL_CHAT_ACTION("SWEEP_CATALOG");
-          } else {
-            dispatchChatCommandToOwner("AGY_SWEEP_CATALOG_V2", {});
-          }
-          setTimeout(async () => {
-            await loadSmartSearchCatalog();
-            renderSmartSearchResults();
-            sweepBtn.textContent = "🔄 Quét đủ";
-            sweepBtn.disabled = false;
-          }, 1800);
-        };
+        sweepBtn.onclick = () => triggerCatalogSweepFromTop();
 
         const inp = document.getElementById("agy-ss-input");
         inp.value = smartSearchState.query;
@@ -1218,6 +1250,7 @@
             e.preventDefault();
             if (smartSearchState.projectFilter) {
               smartSearchState.projectFilter = "";
+              smartSearchState.scope = "all";
               updateSmartSearchScopeButtons();
               renderSmartSearchResults();
             } else {
@@ -1251,7 +1284,9 @@
 
         ov.querySelectorAll("[data-ss-scope]").forEach((btn) => {
           btn.onclick = () => {
-            smartSearchState.scope = btn.getAttribute("data-ss-scope") || "all";
+            const clicked = btn.getAttribute("data-ss-scope") || "all";
+            // Click an active filter again to toggle back to combined default "all"
+            smartSearchState.scope = (clicked !== "all" && smartSearchState.scope === clicked) ? "all" : clicked;
             smartSearchState.selectedIdx = 0;
             updateSmartSearchScopeButtons();
             renderSmartSearchResults();
@@ -1264,11 +1299,7 @@
         setTimeout(() => inp.focus(), 40);
 
         if (smartSearchState.catalog.length === 0) {
-          dispatchChatCommandToOwner("AGY_SWEEP_CATALOG_V2", {});
-          setTimeout(async () => {
-            await loadSmartSearchCatalog();
-            if (smartSearchState.open) renderSmartSearchResults();
-          }, 1200);
+          triggerCatalogSweepFromTop();
         }
       }
 
@@ -1280,11 +1311,43 @@
         }
       };
 
-      window.__AGY_REFRESH_SMART_SEARCH = async () => {
+      window.__AGY_SWEEP_UI_PROGRESS = (info) => {
+        if (!smartSearchState.open) return;
+        const b = document.getElementById("agy-ss-sweep-btn");
+        if (b && info) {
+          b.textContent = `⏳ ${info.projects || 0} DA · ${info.chats || 0} chat...`;
+        }
+      };
+
+      window.__AGY_REFRESH_SMART_SEARCH = async (info) => {
+        smartSearchState.isSweeping = false;
+        clearTimeout(smartSearchState._sweepFailTimer);
+        const b = document.getElementById("agy-ss-sweep-btn");
+        if (b) {
+          b.textContent = "🔄 Quét đủ";
+          b.disabled = false;
+        }
         if (!smartSearchState.open) return;
         await loadSmartSearchCatalog();
         renderSmartSearchResults();
+        if (info && typeof info === "object" && info.projects !== undefined) {
+          const statEl = document.getElementById("agy-ss-stat");
+          if (statEl) {
+            statEl.textContent = `Đã quét ${info.projects} dự án · ${info.chats || 0} hội thoại (hiển thị ${smartSearchState.results.length})`;
+          }
+        }
       };
+
+      if (chrome?.storage?.onChanged) {
+        chrome.storage.onChanged.addListener((changes, area) => {
+          if (area !== "local" || !isCurrentInstance() || !smartSearchState.open) return;
+          if (changes.agy_search_index) {
+            loadSmartSearchCatalog().then(() => {
+              if (smartSearchState.open) renderSmartSearchResults();
+            });
+          }
+        });
+      }
 
       addSafeListener(smartSearchBtn, "click", (e) => {
         e.stopPropagation();
@@ -4410,10 +4473,26 @@
           itemsMap.set(key, { ...prev, ...entry, updatedAt: entry.updatedAt || prev.updatedAt || now });
         }
 
-        // 1. Visible Project Headers
-        document.querySelectorAll('button[data-testid="project-header"]').forEach((btn) => {
+        // 1. Visible Project Headers & Folder Labels (supports all Antigravity sidebar variants)
+        const sidebarRoot = document.querySelector('[role="navigation"][aria-label="Sidebar"], [data-testid="conversation-list-sidebar"], aside, nav') || document;
+        sidebarRoot.querySelectorAll('button[data-testid="project-header"], [data-project-card="true"], [data-project-label]').forEach((btn) => {
           const lbl = (btn.getAttribute("data-project-label") || btn.innerText || btn.textContent || "").replace(/\s+/g, " ").trim();
-          if (!lbl) return;
+          if (!lbl || /^(in progress|idle|pinned|conversations|projects)$/i.test(lbl)) return;
+          upsert({
+            isProjectHeader: true,
+            kind: "project",
+            projectLabel: lbl,
+            title: lbl,
+            cascadeId: "",
+            updatedAt: now,
+          });
+        });
+
+        sidebarRoot.querySelectorAll('[data-project-glyph="folder"]').forEach((glyph) => {
+          if (glyph.closest('[data-testid="conversation-row-sidebar"]')) return;
+          const wrap = glyph.closest('button, a, [role="button"], div.flex') || glyph.parentElement;
+          const lbl = (wrap?.innerText || wrap?.textContent || "").replace(/\s+/g, " ").trim();
+          if (!lbl || lbl.length > 100 || /^(in progress|idle|pinned|conversations|projects)$/i.test(lbl)) return;
           upsert({
             isProjectHeader: true,
             kind: "project",
@@ -4463,6 +4542,16 @@
           let proj = "";
           const folder = fp.querySelector('[data-project-glyph="folder"]')?.parentElement?.textContent || "";
           if (folder) proj = folder.trim();
+          if (proj) {
+            upsert({
+              isProjectHeader: true,
+              kind: "project",
+              projectLabel: proj,
+              title: proj,
+              cascadeId: "",
+              updatedAt: now,
+            });
+          }
           upsert({
             isProjectHeader: false,
             kind: "conversation",
@@ -4499,6 +4588,21 @@
         } catch (_) {}
       }
 
+      function findSidebarScrollContainer() {
+        const primary = document.querySelector('[data-testid="conversation-list-sidebar"], [data-sidebar-scroll-container="true"]');
+        if (primary && primary.scrollHeight > primary.clientHeight + 20) return primary;
+        const nav = document.querySelector('[role="navigation"][aria-label="Sidebar"], aside, nav');
+        if (nav) {
+          const scrollers = Array.from(nav.querySelectorAll('.overflow-y-auto, [class*="overflow-y"]'))
+            .filter((el) => el.scrollHeight > el.clientHeight + 20);
+          if (scrollers.length > 0) {
+            scrollers.sort((a, b) => b.scrollHeight - a.scrollHeight);
+            return scrollers[0];
+          }
+        }
+        return primary || null;
+      }
+
       async function sweepFullCatalogForSmartSearch() {
         if (!isChatOwnerActive() || catalogSweepBusy) return;
         catalogSweepBusy = true;
@@ -4510,51 +4614,90 @@
               if (k) allMap.set(k, x);
             }
           };
+          const countStats = () => {
+            let projects = 0, chats = 0;
+            for (const v of allMap.values()) {
+              if (v.isProjectHeader) projects++;
+              else if (v.cascadeId) chats++;
+            }
+            return { projects, chats };
+          };
 
           mergeSnap(collectCatalogSnapshot());
 
-          const sc = document.querySelector('[data-testid="conversation-list-sidebar"]');
+          const sc = findSidebarScrollContainer();
           if (sc) {
             const origTop = sc.scrollTop;
-            const step = Math.max(360, Math.floor((sc.clientHeight || 400) * 0.85));
-            for (let y = 0, steps = 0; y <= sc.scrollHeight + step && steps < 35; y += step, steps++) {
+            const step = Math.max(180, Math.floor((sc.clientHeight || 400) * 0.65));
+            let y = 0;
+            let atEndCount = 0;
+
+            for (let stepCount = 0; stepCount < 250; stepCount++) {
               sc.scrollTop = y;
               sc.dispatchEvent(new Event("scroll", { bubbles: true }));
-              await smartDelay(75);
+              await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 55)));
               mergeSnap(collectCatalogSnapshot());
+
+              if (stepCount % 5 === 0) {
+                const st = countStats();
+                try {
+                  window.top.postMessage({ type: "AGY_SWEEP_PROGRESS_V2", projects: st.projects, chats: st.chats }, "*");
+                } catch (_) {}
+              }
+
+              const maxTop = Math.max(0, sc.scrollHeight - sc.clientHeight);
+              if (y >= maxTop) {
+                atEndCount++;
+                if (atEndCount >= 2) break;
+                y = maxTop;
+              } else {
+                y = Math.min(maxTop, y + step);
+              }
             }
+
+            // Capture any visible "See all (N)" expanded rows safely without losing earlier full sweep
+            const seeAllBtns = Array.from(document.querySelectorAll("button, a, [role='button']")).filter((b) => {
+              if (!isElementVisible(b)) return false;
+              const t = (b.textContent || "").trim();
+              return /^see all\s*(\(\d+\))?$/i.test(t) || /^xem tất cả/i.test(t);
+            }).slice(0, 6);
+
+            for (const btn of seeAllBtns) {
+              try {
+                forceClick(btn);
+                await smartDelay(240);
+                mergeSnap(collectCatalogSnapshot());
+              } catch (_) {}
+            }
+
             sc.scrollTop = origTop;
             sc.dispatchEvent(new Event("scroll", { bubbles: true }));
           }
 
-          // Expand collapsed project headers or "See all (N)" buttons transiently to capture hidden chats
-          const seeAllBtns = Array.from(document.querySelectorAll("button, a, [role='button']")).filter((b) => {
-            if (!isElementVisible(b)) return false;
-            const t = (b.textContent || "").trim();
-            return /^see all\s*(\(\d+\))?$/i.test(t) || /^xem tất cả/i.test(t);
-          }).slice(0, 5);
-
-          for (const btn of seeAllBtns) {
-            try {
-              forceClick(btn);
-              await smartDelay(260);
-              mergeSnap(collectCatalogSnapshot());
-            } catch (_) {}
-          }
-
           const collected = Array.from(allMap.values());
+          const finalStats = countStats();
           const remoteCtx = getCurrentRemoteContext();
-          chrome.runtime.sendMessage({
-            type: "AGY_REGISTER_CATALOG",
-            catalogItems: collected,
-            activeProjectLabel: remoteCtx.projectLabel || "",
-            activeCascadeId: remoteCtx.cascadeId || "",
-            isChatOwner: true,
-            remoteContext: remoteCtx,
-          }, () => { void chrome.runtime.lastError; });
+          await new Promise((resolve) => {
+            chrome.runtime.sendMessage({
+              type: "AGY_REGISTER_CATALOG",
+              catalogItems: collected,
+              activeProjectLabel: remoteCtx.projectLabel || "",
+              activeCascadeId: remoteCtx.cascadeId || "",
+              isChatOwner: true,
+              remoteContext: remoteCtx,
+            }, () => {
+              void chrome.runtime.lastError;
+              resolve();
+            });
+          });
 
           try {
-            window.top.postMessage({ type: "AGY_SWEEP_DONE_V2", count: collected.length }, "*");
+            window.top.postMessage({
+              type: "AGY_SWEEP_DONE_V2",
+              count: collected.length,
+              projects: finalStats.projects,
+              chats: finalStats.chats
+            }, "*");
           } catch (_) {}
         } finally {
           catalogSweepBusy = false;
@@ -5017,12 +5160,18 @@
 
       function scanHandoffAndResultBlocks() {
         if (!isCurrentInstance() || !isChatOwnerActive() || !HANDOFF_CORE) return;
-        const nodes = document.querySelectorAll("pre, code");
+        // Scan ONLY fenced <pre> code blocks (never inline <code> mentions inside prose)
+        const nodes = document.querySelectorAll("pre");
         for (const el of nodes) {
           if (el.closest('[data-agy-ui="1"], #agy-control-container, #agy-smart-search-overlay')) continue;
-          if (el.tagName === "CODE" && el.closest("pre")) continue;
-          const raw = el.innerText || el.textContent || "";
+          const raw = (el.innerText || el.textContent || "").trim();
           if (!raw.includes(HANDOFF_CORE.HANDOFF_START_MARKER) && !raw.includes(HANDOFF_CORE.RESULT_START_MARKER)) {
+            continue;
+          }
+
+          // Ignore bare single-line marker strings without multi-line payload or metadata fields
+          const hasBlockStructure = raw.includes("\n") || /(?:id|target_project|action_summary)\s*:|---PROMPT---|---RESULT---/i.test(raw);
+          if (!hasBlockStructure) {
             continue;
           }
 
@@ -5030,8 +5179,7 @@
             const h = HANDOFF_CORE.parseHandoffBlock(raw);
             if (h.found) {
               if (h.id === "<handoff_id>" || h.prompt === "<nội dung prompt nhiều dòng>") continue;
-              const anchorEl = el.closest("pre") || el;
-              renderHandoffBar(anchorEl, h);
+              renderHandoffBar(el, h);
             }
           }
 
@@ -5039,8 +5187,7 @@
             const r = HANDOFF_CORE.parseResultBlock(raw);
             if (r.found && r.complete) {
               if (!r.body || /^<ket qua/i.test(r.body.trim())) continue;
-              const anchorEl = el.closest("pre") || el;
-              renderResultBar(anchorEl, r);
+              renderResultBar(el, r);
             }
           }
         }
@@ -5258,6 +5405,16 @@
 
       window.__AGY_CATALOG_INTERVAL = setInterval(() => syncCatalogToBackground(false), 3500);
       window.__AGY_HANDOFF_INTERVAL = setInterval(scanHandoffAndResultBlocks, 1500);
+
+      // Background auto-sweep once ~4.5s after load so deep projects (beyond initial viewport) are pre-indexed
+      setTimeout(() => {
+        if (!isCurrentInstance() || !isChatOwnerActive() || catalogSweepBusy) return;
+        const now = Date.now();
+        if (now - lastSidebarHoverTime < 6000 || now - lastUserInteractTime < 4500) return;
+        if (findSidebarScrollContainer()) {
+          sweepFullCatalogForSmartSearch();
+        }
+      }, 4500);
 
       // Single-use pending Local Handoff recovery (if new Local tab was opened on dispatch)
       setTimeout(async () => {

@@ -122,6 +122,10 @@ function enqueueCatalogMerge(incomingItems, meta) {
         map.set(key, {
           ...prev,
           ...item,
+          title: item.title || prev.title || "",
+          projectLabel: item.projectLabel || prev.projectLabel || "",
+          subtext: item.subtext || prev.subtext || "",
+          href: item.href || prev.href || "",
           sourceTabId: (meta && meta.tabId) || item.sourceTabId || prev.sourceTabId || null,
           sourceIsRemote: Boolean(meta && meta.isRemote),
           updatedAt: item.updatedAt || now
@@ -130,12 +134,13 @@ function enqueueCatalogMerge(incomingItems, meta) {
 
       const merged = Array.from(map.values())
         .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0))
-        .slice(0, 600);
+        .slice(0, 2500);
 
       await chrome.storage.local.set({
         [STORAGE_KEYS.SEARCH_INDEX]: merged,
-        [STORAGE_KEYS.LOCAL_CATALOG]: merged.filter((x) => !x.sourceIsRemote).slice(0, 400)
+        [STORAGE_KEYS.LOCAL_CATALOG]: merged.filter((x) => !x.sourceIsRemote).slice(0, 2000)
       });
+      return merged.length;
     } catch (err) {
       console.warn("[AGY-BG] Catalog merge error:", err);
     }
@@ -202,11 +207,26 @@ async function handleGetActiveRemoteContext() {
     remoteTabs.sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0));
     return { ok: true, context: extractCtxFromTab(remoteTabs[0]) };
   }
+  const unifiedTabs = tabs.filter((t) => /\/r\//i.test(t.url || ""));
+  if (unifiedTabs.length > 0) {
+    unifiedTabs.sort((a, b) => {
+      const ctxA = extractCtxFromTab(a);
+      const ctxB = extractCtxFromTab(b);
+      const sA = (a.active ? 10 : 0) + (ctxA.projectId ? 5 : 0);
+      const sB = (b.active ? 10 : 0) + (ctxB.projectId ? 5 : 0);
+      return sB - sA;
+    });
+    return { ok: true, context: extractCtxFromTab(unifiedTabs[0]) };
+  }
+  if (tabs.length > 0) {
+    tabs.sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0));
+    return { ok: true, context: extractCtxFromTab(tabs[0]) };
+  }
   const data = await chrome.storage.local.get([STORAGE_KEYS.LAST_REMOTE_CTX]);
   if (data[STORAGE_KEYS.LAST_REMOTE_CTX]) {
     return { ok: true, context: data[STORAGE_KEYS.LAST_REMOTE_CTX] };
   }
-  return { ok: false, error: "Chua phat hien tab Web Remote (/remote/) nao dang mo." };
+  return { ok: false, error: "Chua phat hien tab Antigravity nao dang mo." };
 }
 
 async function handleDispatchHandoff(msg, sender) {
@@ -240,6 +260,10 @@ async function handleDispatchHandoff(msg, sender) {
   };
 
   let localTab = await findBestLocalTab(sourceTabId);
+  if (!localTab && sender && sender.tab && /\/r\//i.test(sender.tab.url || "")) {
+    // Desktop /r/... unified shell holds both Remote & Local sidebar projects in the same tab
+    localTab = sender.tab;
+  }
   if (!localTab) {
     const nonce = handoffId + "_" + Date.now();
     await chrome.storage.local.set({
@@ -315,33 +339,34 @@ async function handleReturnResultToWeb(msg) {
   const job = handoffId ? jobs[handoffId] : null;
   const tabs = await queryAllAntigravityTabs();
   const remoteTabs = tabs.filter((t) => /\/remote\//i.test(t.url || ""));
+  const candidateReturnTabs = remoteTabs.length > 0 ? remoteTabs : tabs.filter((t) => /\/r\//i.test(t.url || ""));
 
   let targetTab = null;
   if (job && job.sourceTabId) {
-    targetTab = remoteTabs.find((t) => t.id === job.sourceTabId) || null;
+    targetTab = tabs.find((t) => t.id === job.sourceTabId) || null;
   }
   if (!targetTab && job && job.sourceRemoteCtx) {
     const ws = String(job.sourceRemoteCtx.workspaceId || "").toLowerCase();
     const u = String(job.sourceRemoteCtx.url || "").toLowerCase();
-    targetTab = remoteTabs.find((t) => {
+    targetTab = candidateReturnTabs.find((t) => {
       const tu = String(t.url || "").toLowerCase();
       return (ws && tu.includes(ws)) || (u && tu === u);
     }) || null;
   }
-  if (!targetTab && remoteTabs.length === 1) {
-    targetTab = remoteTabs[0];
-  } else if (!targetTab && remoteTabs.length > 1) {
+  if (!targetTab && candidateReturnTabs.length === 1) {
+    targetTab = candidateReturnTabs[0];
+  } else if (!targetTab && candidateReturnTabs.length > 1) {
     const mappings = Array.isArray(data[STORAGE_KEYS.MAPPINGS]) ? data[STORAGE_KEYS.MAPPINGS] : [];
     const projNorm = CORE ? CORE.normalizeSearchText(job && job.targetLocalProject) : "";
     for (const m of mappings) {
       if (!projNorm || !m || !m.remoteMatch) continue;
       if (CORE.normalizeSearchText(m.localProject) === projNorm) {
         const needle = m.remoteMatch.toLowerCase();
-        targetTab = remoteTabs.find((t) => String(t.url || "").toLowerCase().includes(needle)) || null;
+        targetTab = candidateReturnTabs.find((t) => String(t.url || "").toLowerCase().includes(needle)) || null;
         if (targetTab) break;
       }
     }
-    if (!targetTab) targetTab = remoteTabs[0];
+    if (!targetTab) targetTab = candidateReturnTabs[0];
   }
 
   if (!targetTab) {
@@ -428,11 +453,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
     }
     const ctx = tab ? extractCtxFromTab(tab) : (msg.remoteContext || {});
-    if (isRemote && ctx.url) {
+    if ((isRemote || ctx.isUnifiedShell) && ctx.url) {
       chrome.storage.local.set({ [STORAGE_KEYS.LAST_REMOTE_CTX]: ctx }).catch(() => {});
     }
-    enqueueCatalogMerge(msg.catalogItems, { tabId, isRemote }).then(() => {
-      sendResponse({ ok: true, tabContext: ctx });
+    enqueueCatalogMerge(msg.catalogItems, { tabId, isRemote }).then((totalCount) => {
+      sendResponse({ ok: true, count: totalCount || 0, tabContext: ctx });
     });
     return true;
   }

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AGY Auto-Approve",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Tu dong phe duyet, tuan tra da du an, tim kiem thong minh va Handoff 1-click Remote <-> Local cho Google Antigravity.",
   "permissions": [
     "storage",
