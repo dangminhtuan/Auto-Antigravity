@@ -9,7 +9,7 @@
  */
 
 (() => {
-  const AGY_VERSION = "2.0.1";
+  const AGY_VERSION = "2.0.2";
   const HANDOFF_CORE = typeof window !== "undefined" ? window.AGY_HANDOFF_CORE : null;
   let hostTabMeta = { url: window.self === window.top ? window.location.href : "", title: window.self === window.top ? document.title : "" };
   // ─── Guard: Run on Antigravity / AI Studio top frames and ALL non-noise Antigravity/remote subframes ─
@@ -4843,6 +4843,7 @@
           .agy-hb-btn:disabled { opacity: 0.55 !important; cursor: not-allowed !important; }
           .agy-hb-btn-primary { background: #2563eb !important; color: #fff !important; }
           .agy-hb-btn-return { background: #059669 !important; color: #fff !important; }
+          .agy-hb-btn-pairlocal { background: rgba(16, 185, 129, 0.24) !important; border: 1px solid rgba(52, 211, 153, 0.6) !important; color: #6ee7b7 !important; }
           .agy-hb-btn-save { background: rgba(245, 158, 11, 0.22) !important; border: 1px solid rgba(245, 158, 11, 0.55) !important; color: #fde68a !important; }
           .agy-hb-btn-sec { background: rgba(255, 255, 255, 0.1) !important; border: 1px solid rgba(255, 255, 255, 0.2) !important; color: #e2e8f0 !important; }
           .agy-hb-check {
@@ -4855,6 +4856,27 @@
           }
         `;
         (document.head || document.documentElement).appendChild(st);
+      }
+
+      let openLocalTabInfo = null;
+      let lastOpenLocalTabCheckAt = 0;
+
+      function refreshOpenLocalTabInfo(force = false, onUpdated = null) {
+        const now = Date.now();
+        if (!force && now - lastOpenLocalTabCheckAt < 5000) return;
+        lastOpenLocalTabCheckAt = now;
+        try {
+          chrome.runtime.sendMessage({ type: "AGY_GET_ACTIVE_LOCAL_TAB" }, (resp) => {
+            if (chrome.runtime.lastError || !resp || !resp.ok) return;
+            const nextInfo = resp.localTab || null;
+            const prevKey = openLocalTabInfo ? `${openLocalTabInfo.tabId}|${openLocalTabInfo.projectLabel}|${openLocalTabInfo.chatTitle}` : "";
+            const nextKey = nextInfo ? `${nextInfo.tabId}|${nextInfo.projectLabel}|${nextInfo.chatTitle}` : "";
+            openLocalTabInfo = nextInfo;
+            if (prevKey !== nextKey && typeof onUpdated === "function") {
+              onUpdated();
+            }
+          });
+        } catch (_) {}
       }
 
       function getAllKnownLocalProjects(resolvedProject) {
@@ -4913,6 +4935,17 @@
           : (resolved.targetLocalProject || resolved.suggestedLocalProject || "");
         const projects = getAllKnownLocalProjects(chosenProj);
 
+        const canShowPairLocal = resolved.matchedBy === "unmatched" || resolved.matchedBy === "default";
+        if (handoff.complete && canShowPairLocal) {
+          refreshOpenLocalTabInfo(false, () => {
+            bar.dataset.agySig = "";
+            renderHandoffBar(codeContainer, handoff);
+          });
+        }
+        const openLocalLabel = canShowPairLocal && openLocalTabInfo
+          ? String(openLocalTabInfo.projectLabel || openLocalTabInfo.chatTitle || "").trim()
+          : "";
+
         const sig = JSON.stringify([
           handoff.complete ? 1 : 0,
           hid,
@@ -4923,6 +4956,7 @@
           resolved.targetLocalProject,
           chosenProj,
           projects.join("|"),
+          openLocalLabel,
         ]);
         if (bar.dataset.agySig === sig) return;
         bar.dataset.agySig = sig;
@@ -4985,6 +5019,7 @@
             <button type="button" class="agy-hb-btn agy-hb-btn-primary agy-hb-send" ${(jobStatus === "sending" || !chosenProj) ? "disabled" : ""}>
               ${jobStatus === "sending" ? "⏳ Đang gửi..." : (isSent ? `🔄 Gửi lại (${chosenProj.replace(/</g, "&lt;")})` : `▶ Gửi sang Local (${(chosenProj || "Chọn dự án").replace(/</g, "&lt;")})`)}
             </button>
+            ${openLocalLabel ? `<button type="button" class="agy-hb-btn agy-hb-btn-pairlocal agy-hb-pairlocal" title="Ghép tab này với dự án ở Tab Local đang mở">🔗 Ghép với Tab Local đang mở (${openLocalLabel.slice(0, 28).replace(/</g, "&lt;")})</button>` : ""}
             ${needsQuickSave ? `<button type="button" class="agy-hb-btn agy-hb-btn-save agy-hb-quicksave">💾 Lưu liên kết này</button>` : ""}
             <button type="button" class="agy-hb-btn agy-hb-btn-sec agy-hb-opts" title="Mở Setting Remote <-> Local">⚙️</button>
           </div>
@@ -4993,6 +5028,7 @@
         const sel = bar.querySelector(".agy-hb-select");
         const chk = bar.querySelector(".agy-hb-newchat");
         const sendBtn = bar.querySelector(".agy-hb-send");
+        const pairLocalBtn = bar.querySelector(".agy-hb-pairlocal");
         const saveBtn = bar.querySelector(".agy-hb-quicksave");
         const optsBtn = bar.querySelector(".agy-hb-opts");
 
@@ -5010,6 +5046,32 @@
         }
         if (optsBtn) {
           optsBtn.onclick = () => chrome.runtime.sendMessage({ type: "AGY_OPEN_OPTIONS" });
+        }
+        if (pairLocalBtn && openLocalTabInfo) {
+          pairLocalBtn.onclick = async () => {
+            const projToSave = String(openLocalTabInfo.projectLabel || openLocalTabInfo.chatTitle || "").trim();
+            if (!projToSave) return;
+            const aliasToSave = !HANDOFF_CORE.isGenericTargetProject(handoff.targetProject)
+              ? handoff.targetProject
+              : projToSave.toLowerCase().replace(/[^a-z0-9/_-]+/g, "-").replace(/^-|-$/g, "");
+            const resp = await chrome.runtime.sendMessage({
+              type: "AGY_SAVE_QUICK_MAPPING",
+              payload: {
+                alias: aliasToSave || projToSave,
+                remoteMatch: remoteCtx.suggestedMatch || remoteCtx.projectLabel || remoteCtx.url,
+                localProject: projToSave,
+                localCascadeId: openLocalTabInfo.projectLabel ? "" : (openLocalTabInfo.cascadeId || ""),
+                isDefault: cachedMappings.length === 0,
+              },
+            });
+            if (resp && resp.ok) {
+              delete bar.dataset.userSelectedProj;
+              await refreshHandoffStorageCache();
+              bar.dataset.agySig = "";
+              renderHandoffBar(codeContainer, handoff);
+              updateBar(`🔗 Đã ghép với Tab Local đang mở (${projToSave})!`, "success", 2800);
+            }
+          };
         }
         if (saveBtn) {
           saveBtn.onclick = async () => {
@@ -5349,6 +5411,19 @@
       try {
         chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           if (!isCurrentInstance() || !isChatOwnerActive() || !msg) return false;
+          if (msg.type === "AGY_GET_LIVE_TAB_CONTEXT") {
+            try {
+              const ctx = getCurrentRemoteContext();
+              sendResponse({
+                ok: true,
+                ...ctx,
+                chatTitle: getCurrentConversationTitle() || "",
+              });
+            } catch (_) {
+              sendResponse({ ok: false });
+            }
+            return false;
+          }
           if (msg.type === "AGY_DUMP_SIDEBAR_REQ") {
             dumpSidebarDom({ copyClipboard: true });
             return false;

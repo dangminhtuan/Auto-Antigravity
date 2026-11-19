@@ -70,6 +70,7 @@ const STORAGE_KEYS = {
   MAPPINGS: "agy_project_mappings",
   SEARCH_INDEX: "agy_search_index",
   LOCAL_CATALOG: "agy_local_catalog",
+  REMOTE_CATALOG: "agy_remote_catalog",
   JOBS: "agy_handoff_jobs",
   LAST_REMOTE_CTX: "agy_last_remote_context",
   PENDING_LOCAL_HANDOFF: "agy_pending_local_handoff"
@@ -77,6 +78,46 @@ const STORAGE_KEYS = {
 
 const tabRegistry = new Map();
 let catalogWriteChain = Promise.resolve();
+let remoteCatalogChain = Promise.resolve();
+
+function upsertRemoteCatalogEntry(ctx) {
+  if (!ctx || (!ctx.suggestedMatch && !ctx.url && !ctx.projectLabel)) return remoteCatalogChain;
+  const matchKey = String(ctx.suggestedMatch || ctx.projectId || ctx.workspaceId || ctx.url || "").trim();
+  if (!matchKey) return remoteCatalogChain;
+
+  remoteCatalogChain = remoteCatalogChain.then(async () => {
+    try {
+      const data = await chrome.storage.local.get([STORAGE_KEYS.REMOTE_CATALOG]);
+      const existing = Array.isArray(data[STORAGE_KEYS.REMOTE_CATALOG]) ? data[STORAGE_KEYS.REMOTE_CATALOG] : [];
+      const map = new Map();
+      for (const item of existing) {
+        if (item && item.remoteMatch) map.set(String(item.remoteMatch).toLowerCase(), item);
+      }
+      const normKey = matchKey.toLowerCase();
+      const prev = map.get(normKey) || {};
+      const nextLabel = String(ctx.projectLabel || prev.projectLabel || ctx.chatTitle || ctx.title || matchKey).trim();
+      map.set(normKey, {
+        ...prev,
+        remoteMatch: matchKey,
+        label: nextLabel,
+        projectLabel: String(ctx.projectLabel || prev.projectLabel || "").trim(),
+        chatTitle: String(ctx.chatTitle || prev.chatTitle || "").trim(),
+        title: String(ctx.title || prev.title || "").trim(),
+        url: String(ctx.url || prev.url || "").trim(),
+        workspaceId: String(ctx.workspaceId || prev.workspaceId || "").trim(),
+        projectId: String(ctx.projectId || prev.projectId || "").trim(),
+        isRemote: Boolean(ctx.isRemote || prev.isRemote),
+        isUnifiedShell: Boolean(ctx.isUnifiedShell || prev.isUnifiedShell),
+        updatedAt: Date.now()
+      });
+      const list = Array.from(map.values())
+        .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0))
+        .slice(0, 100);
+      await chrome.storage.local.set({ [STORAGE_KEYS.REMOTE_CATALOG]: list });
+    } catch (_) {}
+  });
+  return remoteCatalogChain;
+}
 
 function extractCtxFromTab(tab) {
   const url = String((tab && tab.url) || "");
@@ -198,6 +239,97 @@ async function findBestLocalTab(excludeTabId) {
   });
 
   return candidates[0];
+}
+
+async function probeTabLiveContext(tab) {
+  const base = extractCtxFromTab(tab);
+  if (!tab || !tab.id) return base;
+
+  let live = null;
+  try {
+    live = await Promise.race([
+      chrome.tabs.sendMessage(tab.id, { type: "AGY_GET_LIVE_TAB_CONTEXT" }).catch(() => null),
+      new Promise((resolve) => setTimeout(() => resolve(null), 450))
+    ]);
+  } catch (_) {
+    live = null;
+  }
+
+  return {
+    ...base,
+    tabId: tab.id,
+    active: Boolean(tab.active),
+    windowId: tab.windowId,
+    index: tab.index,
+    url: tab.url || base.url || "",
+    title: (live && live.title) || tab.title || base.title || "",
+    projectLabel: (live && live.projectLabel) || base.projectLabel || "",
+    chatTitle: (live && live.chatTitle) || "",
+    cascadeId: (live && live.cascadeId) || base.cascadeId || "",
+    isRemote: Boolean(base.isRemote || (live && live.isRemote)),
+    isUnifiedShell: Boolean(base.isUnifiedShell || (live && live.isUnifiedShell))
+  };
+}
+
+async function handleGetOpenAgyTabs() {
+  const tabs = await queryAllAntigravityTabs();
+  const enriched = await Promise.all(tabs.map(probeTabLiveContext));
+
+  for (const ctx of enriched) {
+    if (ctx.isRemote || ctx.isUnifiedShell || ctx.projectId || ctx.projectLabel) {
+      await upsertRemoteCatalogEntry(ctx);
+    }
+  }
+
+  let remoteTab = null;
+  let localTab = null;
+
+  const explicitRemotes = enriched.filter((t) => t.isRemote);
+  const nonRemotes = enriched.filter((t) => !t.isRemote);
+
+  if (explicitRemotes.length > 0 && nonRemotes.length > 0) {
+    explicitRemotes.sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0));
+    nonRemotes.sort((a, b) => (b.projectLabel ? 2 : 0) + (b.active ? 1 : 0) - ((a.projectLabel ? 2 : 0) + (a.active ? 1 : 0)));
+    remoteTab = explicitRemotes[0];
+    localTab = nonRemotes[0];
+  } else if (enriched.length >= 2) {
+    const sorted = [...enriched].sort((a, b) => {
+      const sA = (a.isRemote ? 10 : 0) + (a.projectId ? 5 : 0) + (a.active ? 2 : 0);
+      const sB = (b.isRemote ? 10 : 0) + (b.projectId ? 5 : 0) + (b.active ? 2 : 0);
+      if (sB !== sA) return sB - sA;
+      return Number(a.index || 0) - Number(b.index || 0);
+    });
+    remoteTab = sorted[0];
+    localTab = sorted[1];
+  } else {
+    remoteTab = enriched[0] || null;
+    localTab = null;
+  }
+
+  return {
+    ok: true,
+    tabs: enriched,
+    suggestedPair: { remoteTab, localTab }
+  };
+}
+
+async function handleGetActiveLocalTab(sender) {
+  const senderTabId = sender && sender.tab ? sender.tab.id : null;
+  const tabs = await queryAllAntigravityTabs();
+  const others = tabs.filter((t) => t && t.id && t.id !== senderTabId);
+  if (!others.length) return { ok: true, localTab: null };
+
+  const nonRemote = others.filter((t) => !/\/remote\//i.test(t.url || ""));
+  const pool = (nonRemote.length > 0 ? nonRemote : others).slice(0, 4);
+  const probed = await Promise.all(pool.map(probeTabLiveContext));
+
+  probed.sort((a, b) => {
+    const scoreA = (!a.isRemote ? 20 : 0) + (a.projectLabel ? 10 : 0) + (a.chatTitle ? 5 : 0);
+    const scoreB = (!b.isRemote ? 20 : 0) + (b.projectLabel ? 10 : 0) + (b.chatTitle ? 5 : 0);
+    return scoreB - scoreA;
+  });
+
+  return { ok: true, localTab: probed[0] || null };
 }
 
 async function handleGetActiveRemoteContext() {
@@ -453,8 +585,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
     }
     const ctx = tab ? extractCtxFromTab(tab) : (msg.remoteContext || {});
+    if (msg.remoteContext && msg.remoteContext.projectLabel && !ctx.projectLabel) {
+      ctx.projectLabel = msg.remoteContext.projectLabel;
+    }
     if ((isRemote || ctx.isUnifiedShell) && ctx.url) {
       chrome.storage.local.set({ [STORAGE_KEYS.LAST_REMOTE_CTX]: ctx }).catch(() => {});
+    }
+    if (isRemote || ctx.isUnifiedShell || ctx.projectId || ctx.projectLabel) {
+      upsertRemoteCatalogEntry(ctx);
     }
     enqueueCatalogMerge(msg.catalogItems, { tabId, isRemote }).then((totalCount) => {
       sendResponse({ ok: true, count: totalCount || 0, tabContext: ctx });
@@ -464,6 +602,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === "AGY_GET_ACTIVE_REMOTE_CONTEXT") {
     handleGetActiveRemoteContext().then(sendResponse);
+    return true;
+  }
+
+  if (msg.type === "AGY_GET_OPEN_AGY_TABS") {
+    handleGetOpenAgyTabs().then(sendResponse);
+    return true;
+  }
+
+  if (msg.type === "AGY_GET_ACTIVE_LOCAL_TAB") {
+    handleGetActiveLocalTab(sender).then(sendResponse);
     return true;
   }
 
